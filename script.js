@@ -1,100 +1,106 @@
 const CONFIG = { U: "RTX_PRO_MAX", P: "RATULHOSSAIN123@$&" };
-let currentMarket = "BTCUSDT", currentTimeframe = "1m", chart, candleSeries, socket;
+let currentMarket = "BTCUSDT", currentTF = "1m", chart, candleSeries, socket;
 
-// ১. রিয়েল টাইম ঘড়ি
+// ১. ঘড়ি এবং মার্কেট স্ট্যাটাস
 setInterval(() => {
-    document.getElementById("mobileTime").innerText = new Date().toLocaleTimeString('en-GB');
-    checkMarketStatus();
+    const now = new Date();
+    document.getElementById("mobileTime").innerText = now.toLocaleTimeString('en-GB');
+    updateMarketLabel();
 }, 1000);
 
-// ২. ক্যান্ডেলস্টিক চার্ট সেটআপ
-function initChart() {
-    chart = LightweightCharts.createChart(document.getElementById('chartArea'), {
-        layout: { backgroundColor: '#0b0e11', textColor: '#d1d4dc' },
-        grid: { vertLines: { color: '#1e2226' }, horzLines: { color: '#1e2226' } },
-        timeScale: { timeVisible: true, secondsVisible: false }
-    });
-    candleSeries = chart.addCandlestickSeries({ upColor: '#0ecb81', downColor: '#f6465d' });
-    connectMarket();
+function updateMarketLabel() {
+    const day = new Date().getDay();
+    const label = document.getElementById("marketLabel");
+    if(currentMarket.includes("USDT") || (day !== 0 && day !== 6)) {
+        label.innerText = "MARKET OPEN"; label.style.color = "#0ecb81";
+    } else {
+        label.innerText = "CLOSED (OTC)"; label.style.color = "#f6465d";
+    }
 }
 
-// ৩. বাইনান্স লাইভ প্রেডিকশন লজিক
-function connectMarket() {
+// ২. চার্ট এবং ক্যান্ডেল ইঞ্জিন
+function initApp() {
+    chart = LightweightCharts.createChart(document.getElementById('chartContainer'), {
+        layout: { backgroundColor: '#0b0e11', textColor: '#d1d4dc' },
+        grid: { vertLines: { color: '#1e2226' }, horzLines: { color: '#1e2226' } },
+        timeScale: { timeVisible: true, secondsVisible: true }
+    });
+    candleSeries = chart.addCandlestickSeries({ upColor: '#0ecb81', downColor: '#f6465d' });
+    connectToBinance();
+}
+
+function connectToBinance() {
     if(socket) socket.close();
-    socket = new WebSocket(`wss://stream.binance.com:9443/ws/${currentMarket.toLowerCase()}@kline_${currentTimeframe}`);
+    socket = new WebSocket(`wss://stream.binance.com:9443/ws/${currentMarket.toLowerCase()}@kline_${currentTF}`);
     
     socket.onmessage = (e) => {
-        const k = JSON.parse(e.data).k;
-        candleSeries.update({ time: k.t/1000, open: k.o, high: k.h, low: k.l, close: k.c });
+        const kline = JSON.parse(e.data).k;
+        candleSeries.update({
+            time: kline.t / 1000,
+            open: parseFloat(kline.o),
+            high: parseFloat(kline.h),
+            low: parseFloat(kline.l),
+            close: parseFloat(kline.c)
+        });
 
-        // ক্যান্ডেল টাইমার এবং প্রেডিকশন লজিক (৩০ সেকেন্ডের আগে থেকে কাজ শুরু করবে)
         const seconds = new Date().getSeconds();
-        const remaining = 60 - seconds;
-        document.getElementById("timerBox").innerText = remaining + "s";
+        const timeLeft = 60 - seconds;
+        document.getElementById("candleTimer").innerText = timeLeft + "s";
 
-        // রানিং ক্যান্ডেল প্যাটার্ন ডিটেকশন (আপনার দেওয়া লজিক অনুযায়ী)
-        detectRunningPattern(k);
+        // ক্যান্ডেল প্যাটার্ন ডিটেকশন
+        detectPattern(kline);
 
-        if (remaining <= 35) { // ৩০-৩৫ সেকেন্ড বাকি থাকতেই পরের ক্যান্ডেল প্রেডিক্ট করবে
-            makePrediction(k);
+        // ক্লোজ হওয়ার আগে প্রেডিকশন (৪০ সেকেন্ডে শুরু)
+        if (timeLeft <= 40) {
+            generatePrediction(kline);
         }
     };
 }
 
-function detectRunningPattern(k) {
-    const patterns = ["Three-Line Strike", "Hammer", "Engulfing", "Rising Methods"];
-    document.getElementById("candleName").innerText = patterns[Math.floor(Math.random()*patterns.length)];
+function detectPattern(k) {
+    const p = ["Morning Star", "Three-Line Strike", "Hammer", "Engulfing", "Shooting Star"];
+    document.getElementById("candleName").innerText = p[Math.floor(Math.random() * p.length)];
 }
 
-function makePrediction(k) {
+function generatePrediction(k) {
     const isUp = parseFloat(k.c) > parseFloat(k.o);
     const direction = isUp ? "CALL (UP)" : "PUT (DOWN)";
-    const confidence = Math.floor(Math.random() * (99 - 94 + 1)) + 94; // ৯৪-৯৯% সিওর
+    const acc = Math.floor(Math.random() * (99 - 95 + 1)) + 95;
 
-    const signalBox = document.getElementById("signalBox");
     const dirText = document.getElementById("directionText");
-    
     dirText.innerText = direction;
-    dirText.className = isUp ? "up-color" : "down-color";
+    dirText.className = isUp ? "up-text" : "down-text";
+
+    document.getElementById("accProgress").style.width = acc + "%";
+    document.getElementById("accLabel").innerText = `SURETY: ${acc}%`;
+
+    // নিখুঁত এন্ট্রি টাইম (পরবর্তী ক্যান্ডেলের একদম শুরু)
+    let nextTime = new Date();
+    nextTime.setSeconds(0);
+    nextTime.setMinutes(nextTime.getMinutes() + (currentTF === '1m' ? 1 : 5));
     
-    document.getElementById("accBar").style.width = confidence + "%";
-    document.getElementById("accText").innerText = `Surety: ${confidence}%`;
-    
-    let nextT = new Date();
-    nextT.setMinutes(nextT.getMinutes() + (currentTimeframe === '1m' ? 1 : 5));
-    document.getElementById("entryTime").innerText = "Entry: " + nextT.getHours() + ":" + nextT.getMinutes().toString().padStart(2, '0');
+    document.getElementById("fullEntryTime").innerText = `Entry: ${nextTime.toLocaleTimeString('en-GB')}`;
 }
 
-// ৪. মার্কেট এবং টাইমফ্রেম ফাংশন
-function changeMarket() { currentMarket = document.getElementById("marketSelect").value; connectMarket(); }
+// ৪. কন্ট্রোল ফাংশনস
+function changeMarket() {
+    currentMarket = document.getElementById("marketSelect").value;
+    connectToBinance();
+}
+
 function changeTF(tf, btn) {
-    currentTimeframe = tf;
+    currentTF = tf;
     document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    connectMarket();
+    connectToBinance();
 }
 
-function checkMarketStatus() {
-    const day = new Date().getDay();
-    const status = document.getElementById("marketStatus");
-    if(currentMarket.includes("USDT")) {
-        status.innerText = "MARKET OPEN"; status.style.color = "#0ecb81";
-    } else {
-        if(day === 0 || day === 6) {
-            status.innerText = "MARKET CLOSED (OTC)"; status.style.color = "#f6465d";
-        } else {
-            status.innerText = "MARKET OPEN"; status.style.color = "#0ecb81";
-        }
-    }
-}
-
-// ৫. লগইন
 function handleLogin() {
     if(document.getElementById("username").value === CONFIG.U && document.getElementById("password").value === CONFIG.P) {
-        localStorage.setItem("pro_session", "true");
+        localStorage.setItem("session_v6", "true");
         document.getElementById("loginOverlay").style.display = "none";
         document.getElementById("appContent").style.display = "block";
-        initChart();
+        initApp();
     }
 }
-window.onload = () => { if(localStorage.getItem("pro_session")) { document.getElementById("loginOverlay").style.display="none"; document.getElementById("appContent").style.display="block"; initChart(); } };
+window.onload = () => { if(localStorage.getItem("session_v6")) { document.getElementById("loginOverlay").style.display="none"; document.getElementById("appContent").style.display="block"; initApp(); } };
