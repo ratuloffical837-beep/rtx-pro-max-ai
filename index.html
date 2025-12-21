@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trading Engine v3.0 - Secured</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="loginOverlay" class="overlay">
+        <div class="login-box">
+            <h2>Admin Login</h2>
+            <input type="text" id="username" placeholder="Username">
+            <input type="password" id="password" placeholder="Password">
+            <button onclick="handleLogin()">Login</button>
+            <p id="loginError" style="color: red; display: none;">ভুল ইউজারনেম বা পাসওয়ার্ড!</p>
+        </div>
+    </div>
+
+    <div id="appContent" class="app-container" style="display: none;">
+        <div class="timeframe-selector">
+            <label>TF:</label>
+            <select id="tfInput" onchange="updateMarketScan()">
+                <option value="1m">1 Minute</option>
+                <option value="5m">5 Minutes</option>
+            </select>
+            <button onclick="handleLogout()" class="logout-btn">Logout</button>
+        </div>
+
+        <div class="main-display">
+            <h2 id="pairName">EUR/USD - Pro Analysis</h2>
+            <div id="signalCard" class="neutral">
+                <div id="actionText">স্ক্যানিং...</div>
+                <div id="confidence">Accuracy: --</div>
+            </div>
+        </div>
+
+        <div class="analysis-box">
+            <div class="data-item">Key Level: <span id="keyLevel">--</span></div>
+            <div class="data-item">Volume: <span id="volStatus">--</span></div>
+            <div class="data-item">Pattern: <span id="patternFound">--</span></div>
+        </div>
+
+        <div class="log-container">
+            <h4>Live Trade Logs</h4>
+            <div id="tradeLogs"></div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+  </html>
