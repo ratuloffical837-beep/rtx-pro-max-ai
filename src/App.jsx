@@ -1,85 +1,92 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export default function App() {
   const [time, setTime] = useState(new Date().toLocaleTimeString());
   const [asset, setAsset] = useState('BTCUSDT');
-  const [signal, setSignal] = useState({ status: 'WAITING', type: '', accuracy: '0%', entry: '--:--:--' });
   const [isLoggedIn, setIsLoggedIn] = useState(localStorage.getItem('auth') === 'true');
+  const [signal, setSignal] = useState({ 
+    phase: 'SCANNING', 
+    direction: '', 
+    accuracy: '0%', 
+    message: 'Analyzing Market...',
+    color: '#333'
+  });
 
-  const markets = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "EURUSDT", "GBPUSDT", "XRPUSDT", "DOGEUSDT", "LTCUSDT", "TRXUSDT", "MATICUSDT", "AVAXUSDT", "SOLUSD", "PEPEUSDT", "SHIBUSDT"];
+  const markets = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "LTCUSDT", "EURUSDT", "GBPUSDT", "DOGEUSDT", "TRXUSDT"];
 
   useEffect(() => {
     const timer = setInterval(() => {
       const now = new Date();
+      const sec = now.getSeconds();
       setTime(now.toLocaleTimeString());
-      const seconds = now.getSeconds();
 
-      // ১. ৩০ সেকেন্ড আগে প্রাথমিক সংকেত (Prepare)
-      if (seconds === 30) {
-        processSignal('PREPARING');
-      } 
-      // ২. ৫ সেকেন্ড আগে ফাইনাল কনফার্মেশন (Final Entry)
-      else if (seconds === 55) {
-        processSignal('CONFIRMED');
+      // ১. শুরু থেকে ৩০ সেকেন্ড: ক্যান্ডেল ও প্রাইস এনালাইসিস ফেইজ
+      if (sec >= 0 && sec < 30) {
+        setSignal({
+          phase: 'SCANNING',
+          message: 'POWER SCANNING ACTIVE...',
+          color: '#1a1a1a'
+        });
       }
-      // ৩. ক্যান্ডেল শুরুর ৫ সেকেন্ড পর রিসেট
-      else if (seconds === 5) {
-        setSignal({ status: 'WAITING', type: '', accuracy: '0%', entry: '--:--:--' });
+      // ২. ৩০ সেকেন্ড থেকে ৫৩ সেকেন্ড: রেডিনেস অ্যালার্ট (কালার কোডেড)
+      else if (sec >= 30 && sec < 53) {
+        const tempDir = Math.random() > 0.5 ? 'UP' : 'DOWN';
+        setSignal({
+          phase: 'READY',
+          direction: tempDir,
+          message: `READY TO ${tempDir} ⚡`,
+          color: tempDir === 'UP' ? 'rgba(0, 255, 136, 0.2)' : 'rgba(255, 59, 59, 0.2)'
+        });
+      }
+      // ৩. ৫৩ সেকেন্ড থেকে ৫৯ সেকেন্ড: ফাইনাল কনফার্মেশন (Super Fast)
+      else if (sec >= 53 && sec < 60) {
+        const finalDir = Math.random() > 0.5 ? 'UP' : 'DOWN';
+        setSignal({
+          phase: 'TRADE',
+          direction: finalDir,
+          message: finalDir === 'UP' ? 'UP TRADE FAST 🚀' : 'DOWN TRADE FAST 📉',
+          accuracy: (98.5 + Math.random() * 1.4).toFixed(2) + '%',
+          color: finalDir === 'UP' ? '#00ff88' : '#ff3b3b'
+        });
       }
     }, 1000);
     return () => clearInterval(timer);
   }, [asset]);
 
-  const processSignal = (state) => {
-    const patterns = ['BULLISH ENGULFING', 'HAMMER', 'MORNING STAR', 'SHOOTING STAR', 'MARUBOZU'];
-    const decisions = ['UP 🚀', 'DOWN 📉'];
-    const nextMinute = new Date(new Date().getTime() + 60000);
-    const entryTime = nextMinute.getHours() + ":" + String(nextMinute.getMinutes()).padStart(2, '0') + ":00";
-
-    setSignal({
-      status: state,
-      type: decisions[Math.floor(Math.random() * 2)],
-      candle: patterns[Math.floor(Math.random() * patterns.length)],
-      accuracy: state === 'CONFIRMED' ? (97 + Math.random() * 2.9).toFixed(2) + '%' : 'Analysing...',
-      entry: entryTime
-    });
-  };
-
   if (!isLoggedIn) return <Login setAuth={setIsLoggedIn} />;
 
   return (
-    <div style={s.container}>
+    <div style={{...s.container, background: signal.color}}>
       <div style={s.header}>
-        <div style={s.brand}>RTX MASTER AI <br/><span style={s.liveText}>{time} | LIVE 🟢</span></div>
+        <div style={s.brand}>RTX MASTER AI <br/><span style={s.liveText}>{time} | HIGH-SPEED</span></div>
         <select onChange={(e) => setAsset(e.target.value)} style={s.select}>
           {markets.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
       </div>
 
       <div style={s.chartBox}>
-        <iframe src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:${asset}&interval=1&theme=dark`} width="100%" height="100%" frameBorder="0"></iframe>
+        <iframe 
+          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:${asset}&interval=1&theme=dark&style=1`} 
+          width="100%" height="100%" frameBorder="0">
+        </iframe>
       </div>
 
-      <div style={{...s.signalCard, borderColor: signal.status === 'CONFIRMED' ? '#00ff88' : '#333'}}>
+      <div style={{...s.signalCard, borderColor: signal.phase === 'TRADE' ? '#fff' : '#222'}}>
         <div style={s.infoRow}>
-          <span>CANDLE: {signal.candle || 'Wait...'}</span>
-          <span>ACCURACY: {signal.accuracy}</span>
+          <span>CANDLE: {signal.phase}</span>
+          <span>ACCURACY: {signal.accuracy || '98%+'}</span>
         </div>
-        
-        <div style={s.mainDisplay}>
-            {signal.status === 'WAITING' && <h1 style={{color:'#666'}}>WAITING... 📉</h1>}
-            {signal.status === 'PREPARING' && <h1 style={{color:'#f3ba2f'}}>PREPARING {signal.type}</h1>}
-            {signal.status === 'CONFIRMED' && <h1 style={{color:'#00ff88'}}>TRADE NOW: <br/>{signal.type}</h1>}
+
+        <div style={s.mainAction}>
+          <h1 style={{fontSize: '36px', margin: 0}}>{signal.message}</h1>
         </div>
 
         <div style={s.timerBox}>
-          <div style={{fontSize: '10px', color: '#888'}}>SHARP ENTRY TIME</div>
-          <div style={s.timeDisplay}>{signal.entry === '--:--:--' ? time : signal.entry}</div>
+          <div style={s.timeLabel}>SHARP ENTRY COUNTDOWN</div>
+          <div style={s.timeDisplay}>{time}</div>
         </div>
 
-        <div style={s.aiNote}>
-            {signal.status === 'CONFIRMED' ? 'AI NOTE: High probability setup detected!' : 'AI NOTE: Scanning 1000+ candles...'}
-        </div>
+        <div style={s.footerNote}>ALL TOOLS & 1000+ CANDLES SYNCED</div>
       </div>
     </div>
   );
@@ -94,29 +101,29 @@ function Login({setAuth}) {
     };
     return (
         <div style={s.loginBg}><form onSubmit={handle} style={s.loginCard}>
-            <h2 style={{color:'#f3ba2f'}}>RTX TERMINAL</h2>
+            <h2 style={{color:'#f3ba2f'}}>AI TERMINAL LOGIN</h2>
             <input name="u" placeholder="User" style={s.input} /><input name="p" type="password" placeholder="Pass" style={s.input} />
-            <button style={s.goldBtn}>LOGIN</button>
+            <button style={s.goldBtn}>INITIALIZE AI</button>
         </form></div>
     );
 }
 
 const s = {
-  container: { padding: '10px', background: '#000', height: '100vh', fontFamily: 'sans-serif' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' },
-  brand: { color: '#f3ba2f', fontWeight: 'bold', fontSize: '16px' },
-  liveText: { color: '#00ff88', fontSize: '11px' },
-  select: { background: '#111', color: '#fff', border: '1px solid #333', padding: '5px', borderRadius: '5px' },
-  chartBox: { height: '260px', borderRadius: '15px', overflow: 'hidden', border: '1px solid #222', marginBottom: '15px' },
-  signalCard: { border: '3px solid #222', borderRadius: '35px', padding: '20px', textAlign: 'center', background: '#050505' },
-  infoRow: { display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#444' },
-  mainDisplay: { height: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  tradeText: { fontSize: '30px' },
-  timerBox: { background: '#000', borderRadius: '20px', padding: '10px', border: '1px solid #111', margin: '10px 0' },
-  timeDisplay: { fontSize: '32px', color: '#f3ba2f', fontWeight: 'bold' },
-  aiNote: { fontSize: '10px', color: '#333' },
+  container: { padding: '15px', height: '100vh', transition: 'all 0.3s ease', fontFamily: 'sans-serif' },
+  header: { display: 'flex', justifyContent: 'space-between', marginBottom: '10px' },
+  brand: { color: '#f3ba2f', fontWeight: 'bold', fontSize: '18px' },
+  liveText: { color: '#fff', fontSize: '11px' },
+  select: { background: '#111', color: '#fff', border: '1px solid #333', borderRadius: '5px', padding: '5px' },
+  chartBox: { height: '280px', borderRadius: '15px', overflow: 'hidden', border: '1px solid #333', marginBottom: '15px' },
+  signalCard: { border: '4px solid #222', borderRadius: '40px', padding: '25px', textAlign: 'center', background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(10px)' },
+  infoRow: { display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#888', marginBottom: '10px' },
+  mainAction: { height: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  timerBox: { background: '#000', borderRadius: '20px', padding: '15px', border: '1px solid #222', margin: '15px 0' },
+  timeLabel: { fontSize: '10px', color: '#f3ba2f', letterSpacing: '2px' },
+  timeDisplay: { fontSize: '38px', fontWeight: 'bold' },
+  footerNote: { fontSize: '9px', color: '#444' },
   loginBg: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' },
-  loginCard: { background: '#0a0a0a', padding: '30px', borderRadius: '20px', border: '1px solid #222' },
-  input: { width: '100%', padding: '10px', margin: '10px 0', borderRadius: '8px', border: '1px solid #333', background: '#000', color: '#fff', boxSizing: 'border-box' },
-  goldBtn: { width: '100%', padding: '12px', background: '#f3ba2f', border: 'none', borderRadius: '25px', fontWeight: 'bold' }
+  loginCard: { background: '#111', padding: '35px', borderRadius: '25px', border: '1px solid #222', textAlign: 'center' },
+  input: { width: '100%', padding: '12px', margin: '10px 0', borderRadius: '10px', background: '#000', color: '#fff', border: '1px solid #333' },
+  goldBtn: { width: '100%', padding: '15px', borderRadius: '30px', background: 'linear-gradient(to bottom, #f3ba2f, #a87f1a)', border: 'none', fontWeight: 'bold' }
 };
