@@ -1,31 +1,31 @@
 :root { --gold: #f0b90b; --bg: #0b0e11; --card: #1e2329; --up: #0ecb81; --down: #f6465d; }
-body { background: var(--bg); color: #fff; font-family: 'Inter', sans-serif; margin: 0; overflow: hidden; }
+body { background: var(--bg); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; overflow: hidden; }
 
-.top-nav { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: var(--card); border-bottom: 1px solid #2b3139; }
-#mobileTime { font-size: 18px; font-weight: bold; color: var(--gold); }
-.brand { font-size: 20px; font-weight: 800; letter-spacing: 2px; }
+.header { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--card); border-bottom: 1px solid #2b3139; }
+#mobileTime { font-size: 20px; font-weight: bold; color: var(--gold); }
+.header-center { font-weight: 900; letter-spacing: 1px; }
 
-.tf-bar { display: flex; justify-content: center; gap: 10px; padding: 10px; background: #161a1e; }
-.tf-btn { background: #2b3139; border: none; color: #fff; padding: 5px 15px; border-radius: 4px; cursor: pointer; transition: 0.3s; }
-.tf-btn.active { background: var(--gold); color: #000; font-weight: bold; }
+.control-bar { display: flex; justify-content: center; gap: 15px; padding: 10px; background: #0b0e11; }
+.tf-btn { border: 1px solid #474d57; background: transparent; color: #fff; padding: 5px 20px; border-radius: 4px; cursor: pointer; }
+.tf-btn.active { background: var(--gold); color: #000; border-color: var(--gold); font-weight: bold; }
 
-#chartArea { width: 100%; height: 45vh; border-bottom: 2px solid #2b3139; }
+#chartContainer { width: 100%; height: 50vh; }
 
-.analysis-panel { padding: 15px; display: flex; flex-direction: column; gap: 10px; }
-.current-info { display: flex; justify-content: space-between; background: #161a1e; padding: 10px; border-radius: 8px; border: 1px solid #2b3139; }
-#timerBox { color: var(--gold); font-weight: bold; }
+.prediction-panel { padding: 15px; background: #161a1e; border-top: 1px solid #2b3139; }
+.candle-info { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; }
 
-.prediction-display { background: var(--card); padding: 25px; border-radius: 15px; text-align: center; border: 2px solid #2b3139; transition: 0.5s; }
-#directionText { font-size: 42px; font-weight: 900; margin: 10px 0; }
-.up-color { color: var(--up); text-shadow: 0 0 15px rgba(14, 203, 129, 0.4); }
-.down-color { color: var(--down); text-shadow: 0 0 15px rgba(246, 70, 93, 0.4); }
+.signal-card { background: var(--card); border-radius: 12px; padding: 20px; text-align: center; border: 2px solid #2b3139; }
+#directionText { font-size: 38px; font-weight: 900; margin: 10px 0; }
+.up-text { color: var(--up); text-shadow: 0 0 10px rgba(14, 203, 129, 0.5); }
+.down-text { color: var(--down); text-shadow: 0 0 10px rgba(246, 70, 93, 0.5); }
+#fullEntryTime { font-family: monospace; font-size: 18px; color: var(--gold); }
 
-.accuracy-footer { position: relative; height: 30px; background: #2b3139; border-radius: 20px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-.accuracy-fill { position: absolute; left: 0; height: 100%; background: linear-gradient(90deg, #f0b90b, #ff8c00); transition: 1s; }
-#accText { z-index: 1; font-weight: bold; font-size: 12px; color: #fff; text-shadow: 1px 1px 2px #000; }
+.accuracy-container { margin-top: 15px; position: relative; height: 25px; background: #2b3139; border-radius: 15px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.progress-bar { position: absolute; left: 0; height: 100%; background: linear-gradient(90deg, #f0b90b, #ff7b00); width: 0%; transition: 0.5s; }
+#accLabel { z-index: 1; font-weight: bold; font-size: 11px; }
 
-/* Overlay & Login */
-.overlay { position: fixed; inset: 0; background: var(--bg); display: flex; justify-content: center; align-items: center; z-index: 9999; }
-.login-box { background: var(--card); padding: 40px; border-radius: 20px; text-align: center; border: 1px solid var(--gold); width: 300px; }
-.login-box input { width: 90%; padding: 12px; margin: 10px 0; background: #0b0e11; border: 1px solid #474d57; color: #fff; border-radius: 8px; }
-.login-box button { width: 100%; padding: 12px; background: var(--gold); border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+/* Overlay */
+.overlay { position: fixed; inset: 0; background: #0b0e11; display: flex; justify-content: center; align-items: center; z-index: 9999; }
+.login-box { background: var(--card); padding: 40px; border-radius: 15px; text-align: center; border: 1px solid var(--gold); }
+input { display: block; width: 250px; padding: 12px; margin: 10px 0; background: #000; border: 1px solid #333; color: #fff; border-radius: 5px; }
+button { width: 100%; padding: 12px; background: var(--gold); border: none; font-weight: bold; cursor: pointer; border-radius: 5px; }
