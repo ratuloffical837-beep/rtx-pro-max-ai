@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RTX PRO PREDICTOR V6</title>
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <title>RTX PRO PREDICTOR V7</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -23,47 +23,38 @@
                 <div id="mobileTime">00:00:00</div>
                 <div id="marketLabel" class="badge">Checking...</div>
             </div>
-            <div class="header-center">RTX PRO V6</div>
+            <div class="header-center">RTX PRO V7</div>
             <div class="header-right">
                 <select id="marketSelect" onchange="changeMarket()">
-                    <optgroup label="CRYPTO">
-                        <option value="BTCUSDT">BTC/USDT</option>
-                        <option value="ETHUSDT">ETH/USDT</option>
-                        <option value="BNBUSDT">BNB/USDT</option>
-                        <option value="SOLUSDT">SOL/USDT</option>
-                        <option value="ADAUSDT">ADA/USDT</option>
-                        <option value="XRPUSDT">XRP/USDT</option>
-                        <option value="DOTUSDT">DOT/USDT</option>
-                        <option value="DOGEUSDT">DOGE/USDT</option>
-                    </optgroup>
-                    <optgroup label="FOREX (QUOTEX)">
-                        <option value="EURUSDT">EUR/USD</option>
-                        <option value="GBPUSDT">GBP/USD</option>
-                        <option value="AUDUSDT">AUD/USD</option>
-                        <option value="USDJPY">USD/JPY</option>
-                        <option value="USDCAD">USD/CAD</option>
-                    </optgroup>
+                    <option value="BTCUSDT">BTC/USDT</option>
+                    <option value="ETHUSDT">ETH/USDT</option>
+                    <option value="BNBUSDT">BNB/USDT</option>
+                    <option value="SOLUSDT">SOL/USDT</option>
+                    <option value="EURUSDT">EUR/USD</option>
+                    <option value="GBPUSDT">GBP/USD</option>
+                    <option value="USDJPY">USD/JPY</option>
+                    <option value="XRPUSDT">XRP/USDT</option>
                 </select>
             </div>
         </div>
 
         <div class="control-bar">
-            <button class="tf-btn active" onclick="changeTF('1m', this)">1 MIN</button>
-            <button class="tf-btn" onclick="changeTF('5m', this)">5 MIN</button>
+            <button class="tf-btn active" id="btn1m" onclick="changeTF('1m')">1 MIN</button>
+            <button class="tf-btn" id="btn5m" onclick="changeTF('5m')">5 MIN</button>
         </div>
 
         <div id="chartContainer"></div>
 
         <div class="prediction-panel">
             <div class="candle-info">
-                <span>Running: <b id="candleName" class="gold-text">Detecting...</b></span>
-                <span id="candleTimer">--s</span>
+                <span>Candle: <b id="candleName" class="gold-text">Scanning...</b></span>
+                <span id="candleTimer">60s</span>
             </div>
 
             <div id="signalBox" class="signal-card">
                 <div class="label">NEXT CANDLE PREDICTION</div>
                 <div id="directionText">ANALYZING...</div>
-                <div id="fullEntryTime">Entry: 00:00:00</div>
+                <div id="fullEntryTime">Entry: --:--:--</div>
             </div>
 
             <div class="accuracy-container">
@@ -74,4 +65,4 @@
     </div>
     <script src="script.js"></script>
 </body>
-    </html>
+</html>
