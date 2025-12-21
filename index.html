@@ -1,64 +1,49 @@
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RTX PRO PREDICTOR V8</title>
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <title>RTX AI PRO V3 - Live Analysis</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="loginOverlay" class="overlay">
-        <div class="login-box">
-            <h2 class="gold-text">RTX PRO MAX V8</h2>
-            <input type="text" id="username" placeholder="Username">
-            <input type="password" id="password" placeholder="Password">
-            <button onclick="handleLogin()">LAUNCH ENGINE</button>
-        </div>
-    </div>
+    <div class="container">
+        <header>
+            <h1>RTX <span class="gold">AI PRO V3</span></h1>
+            <div id="clock">00:00:00</div>
+        </header>
 
-    <div id="appContent" class="app-main" style="display: none;">
-        <div class="top-bar">
-            <div class="time-info">
-                <div id="mobileTime">00:00:00</div>
-                <div id="marketStatus" class="status-badge">SYNCING...</div>
-            </div>
-            <div class="brand">RTX V8 PRO</div>
-            <div class="market-nav">
-                <select id="marketSelect" onchange="changeMarket()">
-                    <option value="BTCUSDT">BTC/USDT</option>
-                    <option value="ETHUSDT">ETH/USDT</option>
-                    <option value="EURUSDT">EUR/USD</option>
-                    <option value="GBPUSDT">GBP/USD</option>
-                    <option value="SOLUSDT">SOL/USDT</option>
-                    <option value="XRPUSDT">XRP/USDT</option>
-                    <option value="BNBUSDT">BNB/USDT</option>
-                </select>
-            </div>
-        </div>
+        <section class="controls">
+            <select id="marketSelector">
+                <option value="BTCUSDT">BTC/USDT</option>
+                <option value="ETHUSDT">ETH/USDT</option>
+                <option value="SOLUSDT">SOL/USDT</option>
+                <option value="BNBUSDT">BNB/USDT</option>
+            </select>
+            <select id="timeframe">
+                <option value="1m">1 Minute</option>
+                <option value="5m">5 Minutes</option>
+            </select>
+        </section>
 
-        <div class="tf-control">
-            <button class="tf-btn active" id="tf1m" onclick="updateTF('1m')">1M</button>
-            <button class="tf-btn" id="tf5m" onclick="updateTF('5m')">5M</button>
-        </div>
+        <main class="dashboard">
+            <div class="card signal-card">
+                <h3>Next Candle Prediction</h3>
+                <div id="prediction">ANALYZING...</div>
+                <div id="confidence">Confidence: 0%</div>
+            </div>
 
-        <div id="chartContainer"></div>
+            <div class="card info-card">
+                <p>Pattern: <span id="patternName">Scanning...</span></p>
+                <p>Entry Time: <span id="entryTime" class="gold">--:--:--</span></p>
+            </div>
+        </main>
 
-        <div class="analysis-footer">
-            <div class="row">
-                <span>Pattern: <b id="patternName" class="gold">Detecting...</b></span>
-                <span id="timer">60s</span>
-            </div>
-            <div id="signalBox" class="signal-card">
-                <div id="direction">ANALYZING 1000+ CANDLES...</div>
-                <div id="entryTime">Next Entry: --:--:--</div>
-            </div>
-            <div class="accuracy-box">
-                <div id="accuracyFill" class="fill"></div>
-                <span id="accuracyText">Surety: 0%</span>
-            </div>
-        </div>
+        <section class="indicators">
+            <div class="ind-box">RSI: <span id="rsiVal">--</span></div>
+            <div class="ind-box">SMA 20: <span id="smaVal">--</span></div>
+        </section>
     </div>
     <script src="script.js"></script>
 </body>
-    </html>
+</html>
