@@ -17,9 +17,11 @@ export default function App() {
     borderColor: '#333'
   });
 
+  // শুধু ভেরিফাইড এবং TradingView + Binance Spot-এ সাপোর্টেড পেয়ার
   const markets = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", 
-    "DOTUSDT", "DOGEUSDT", "TRXUSDT", "MATICUSDT", "LTCUSDT", "LINKUSDT", "EURUSDT", "GBPUSDT"
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", 
+    "ADAUSDT", "AVAXUSDT", "DOGEUSDT", "TRXUSDT", "MATICUSDT", 
+    "LTCUSDT", "DOTUSDT", "LINKUSDT"
   ];
 
   // প্যাটার্ন ডিটেকশন
@@ -51,7 +53,7 @@ export default function App() {
     if (ti.hangingman && ti.hangingman({ open: [current.open], high: [current.high], low: [current.low], close: [current.close] })) return 'Hanging Man';
     if (ti.eveningstar && ti.eveningstar({ open: input.slice(-3).map(c => c.open), high: input.slice(-3).map(c => c.high), low: input.slice(-3).map(c => c.low), close: input.slice(-3).map(c => c.close) })) return 'Evening Star';
     if (ti.darkcloudcover && ti.darkcloudcover({ open: [prev1.open, current.open], close: [prev1.close, current.close] })) return 'Dark Cloud Cover';
-    if (ti.threeblackcrows && ti.threeblackcrows({ open: input.slice(-3).map(c => c.open), close: input.slice(-3).map(c => c.close) })) return 'Three Black Crows';
+    if (ti.threeblackcrows && ti.threeblackcrows({ open: input.slice(- 3).map(c => c.open), close: input.slice(-3).map(c => c.close) })) return 'Three Black Crows';
 
     // ডোজি
     if (ti.doji({ open: [current.open], high: [current.high], low: [current.low], close: [current.close] })) return 'Doji (Indecision)';
@@ -149,8 +151,13 @@ export default function App() {
 
       <div style={s.chartBox}>
         <iframe 
-          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:\( {asset}&interval= \){timeframe}&theme=dark&style=1`} 
-          width="100%" height="100%" frameBorder="0">
+          key={`\( {asset}- \){timeframe}`}  // চেঞ্জ হলে রিফ্রেশ হবে
+          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:\( {asset}&interval= \){timeframe}&theme=dark&style=1&hide_top_bar=1&scale=auto`}
+          width="100%" 
+          height="100%" 
+          frameBorder="0"
+          allowTransparency="true"
+          scrolling="no">
         </iframe>
       </div>
 
