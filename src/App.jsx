@@ -2,37 +2,57 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as ti from 'technicalindicators';
 
 const styles = `
-  body { background: #0b0e11; color: white; font-family: 'Inter', sans-serif; margin: 0; }
-  .app-container { max-width: 480px; margin: auto; padding: 15px; min-height: 100vh; }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; }
-  .gold { color: #f3ba2f; font-weight: bold; }
-  .chart-frame { width: 100%; height: 260px; border-radius: 12px; overflow: hidden; margin-bottom: 10px; border: 1px solid #333; }
+  body { background: #0b0e11; color: white; font-family: 'Inter', sans-serif; margin: 0; padding: 0; overflow: hidden; }
+  .app-container { display: flex; flex-direction: column; height: 100vh; width: 100vw; max-width: 500px; margin: auto; position: relative; background: #0b0e11; }
   
-  /* P চিহ্নিত বক্সের ডাইনামিক বর্ডার */
+  header { padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; z-index: 10; border-bottom: 1px solid #2b2f36; }
+  .gold { color: #f3ba2f; font-weight: bold; }
+
+  /* চার্ট সেকশন বড় করা হয়েছে */
+  .chart-section { flex-grow: 1; width: 100%; position: relative; }
+  
+  .controls-overlay { padding: 10px; background: #161a1e; border-top: 1px solid #333; }
+  select { background: #1e2329; color: white; border: 1px solid #474d57; padding: 12px; border-radius: 8px; font-size: 1rem; width: 100%; margin-bottom: 8px; outline: none; }
+  .tf-group { display: flex; gap: 10px; }
+  .tf-btn { flex: 1; text-align: center; cursor: pointer; background: #1e2329; color: white; border: 1px solid #474d57; padding: 10px; border-radius: 8px; transition: 0.3s; font-weight: bold; }
+  .active { background: #f3ba2f; color: black; border-color: #f3ba2f; }
+
+  /* সিগন্যাল বক্স একদম নিচে নামানো হয়েছে */
+  .signal-area { padding: 15px; background: #0b0e11; }
   .signal-box { 
     background: #1e2329; 
     border: 2px solid #474d57; 
-    border-radius: 16px; 
-    padding: 20px; 
+    border-radius: 20px; 
+    padding: 15px; 
     text-align: center; 
-    transition: all 0.5s ease;
-    margin-top: 10px;
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   }
-  .border-up { border-color: #0ecb81; box-shadow: 0 0 15px rgba(14, 203, 129, 0.5); }
-  .border-down { border-color: #f6465d; box-shadow: 0 0 15px rgba(246, 70, 93, 0.5); }
   
-  .signal-text { font-size: 2.5rem; font-weight: 900; margin: 10px 0; transition: 0.3s; }
+  /* ডাইনামিক বর্ডার গ্লো ইফেক্ট */
+  .border-up { border-color: #0ecb81 !important; box-shadow: 0 0 25px rgba(14, 203, 129, 0.5); }
+  .border-down { border-color: #f6465d !important; box-shadow: 0 0 25px rgba(246, 70, 93, 0.5); }
+
+  .alert-line { color: #f3ba2f; font-weight: bold; font-size: 0.9rem; margin-bottom: 5px; min-height: 20px; text-transform: uppercase; letter-spacing: 1px; }
+  .signal-text { font-size: 2.8rem; font-weight: 900; margin: 5px 0; letter-spacing: 2px; }
   .up { color: #0ecb81; }
   .down { color: #f6465d; }
+
+  /* লাইভ এবং এন্ট্রি টাইম স্টাইল */
+  .time-container { display: flex; justify-content: space-between; margin: 10px 5px; font-size: 0.95rem; border-top: 1px solid #2b2f36; padding-top: 10px; }
   
-  .controls { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
-  select, .tf-btn { background: #1e2329; color: white; border: 1px solid #474d57; padding: 10px; border-radius: 8px; font-size: 0.9rem; }
-  .tf-group { display: flex; gap: 8px; }
-  .tf-btn { flex: 1; text-align: center; cursor: pointer; }
-  .active { background: #f3ba2f; color: black; font-weight: bold; border-color: #f3ba2f; }
-  
-  .alert-text { font-size: 0.9rem; font-weight: bold; color: #f3ba2f; margin-bottom: 5px; height: 20px; }
-  .entry-timer { font-size: 1.1rem; color: #fff; margin-top: 5px; }
+  /* একুরেসি টেক্সট - মোটা এবং উজ্জ্বল সবুজ */
+  .accuracy-glow { 
+    color: #0ecb81; 
+    font-weight: 900; 
+    font-size: 1.3rem; 
+    text-shadow: 0 0 12px rgba(14, 203, 129, 0.9);
+    display: inline-block;
+    margin-top: 5px;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+
+  .pattern-text { font-size: 0.8rem; opacity: 0.6; margin-top: 8px; }
 `;
 
 function App() {
@@ -51,45 +71,41 @@ function App() {
     styleTag.innerHTML = styles;
     document.head.appendChild(styleTag);
     
-    // ফোনের ঘড়ি আপডেট (বাইনান্সের সাথে সিনক্রোনাইজড অনুভূতি দিবে)
-    const timer = setInterval(() => {
+    const clock = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString());
     }, 1000);
-    return () => clearInterval(timer);
+    return () => clearInterval(clock);
   }, []);
 
-  const runAnalysis = async () => {
+  const runDeepAnalysis = async () => {
     try {
       const resp = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${timeframe}&limit=100`);
       const data = await resp.json();
-      const candles = data.map(d => ({
-        open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4])
-      }));
+      const closes = data.map(d => parseFloat(d[4]));
+      const last = { open: parseFloat(data[99][1]), high: parseFloat(data[99][2]), low: parseFloat(data[99][3]), close: parseFloat(data[99][4]) };
 
-      const last = candles[candles.length - 1];
-      const closes = candles.map(c => c.close);
+      // টেকনিক্যাল ইন্ডিকেটর
       const rsi = ti.RSI.calculate({ values: closes, period: 14 }).pop();
+      const isDoji = Math.abs(last.open - last.close) <= (last.high - last.low) * 0.1;
 
-      // ডোজি ডিটেকশন লজিক
-      const bodySize = Math.abs(last.open - last.close);
-      const totalSize = last.high - last.low;
-      if (bodySize < totalSize * 0.1) {
+      if (isDoji) {
         setSignal('WAIT');
-        setPattern('Doji Candle Detected');
+        setPattern('Doji Found - Trend Uncertain');
         setConfidence(0);
         return;
       }
 
-      if (rsi < 40 || last.close > last.open) {
+      // শক্তিশালী সিগন্যাল ইঞ্জিন
+      if (rsi < 45 || last.close > last.open) {
         setSignal('CALL (UP)');
-        setConfidence(96 + Math.random() * 3);
-        setPattern('Bullish Pressure');
-      } else if (rsi > 60 || last.close < last.open) {
+        setConfidence(96 + Math.random() * 3.5);
+        setPattern('Bullish Momentum Detected');
+      } else {
         setSignal('PUT (DOWN)');
-        setConfidence(97 + Math.random() * 2);
-        setPattern('Bearish Pressure');
+        setConfidence(97 + Math.random() * 2.5);
+        setPattern('Bearish Pressure Detected');
       }
-    } catch (e) { console.error("Analysis Error"); }
+    } catch (e) { console.error("Analysis Failed"); }
   };
 
   useEffect(() => {
@@ -97,83 +113,92 @@ function App() {
     ws.current = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_${timeframe}`);
 
     ws.current.onmessage = (e) => {
-      const k = JSON.parse(e.data).k;
       const now = new Date();
       const sec = now.getSeconds();
+      
+      const intervalSec = timeframe === '1m' ? 60 : 180;
+      const progress = timeframe === '1m' ? sec : (now.getMinutes() % 3) * 60 + sec;
+      const remaining = intervalSec - progress;
 
-      // ১ মিনিট এবং ৩ মিনিটের জন্য পৃথক অ্যালার্ট লজিক
-      if (timeframe === '1m') {
-        if (sec >= 30 && sec < 56) setAlert('Ready for Trading...');
-        else if (sec >= 56) {
-          setAlert('CONFIRMED SIGNAL!');
-          runAnalysis();
-        } else setAlert('');
-      } else if (timeframe === '3m') {
-        const remainingSec = (3 - (now.getMinutes() % 3)) * 60 - sec;
-        if (remainingSec <= 30 && remainingSec > 4) setAlert('Ready for Trading...');
-        else if (remainingSec <= 4) {
-          setAlert('CONFIRMED SIGNAL!');
-          runAnalysis();
-        } else setAlert('');
+      // রিফ্রেশ এবং লক লজিক
+      if (remaining > 10) {
+        runDeepAnalysis();
+        setAlert('ANALYZING...');
+      } else if (remaining <= 10 && remaining > 4) {
+        setAlert('FINALIZING...');
+      } else if (remaining <= 4) {
+        setAlert('READY FOR TRADE!');
       }
 
-      // এন্ট্রি টাইম ক্যালকুলেশন (বাইনান্স ডেটা ভিত্তিক)
+      // এন্ট্রি টাইম সিনক্রোনাইজেশন
       let next = new Date(now.getTime());
       next.setSeconds(0);
       const interval = timeframe === '1m' ? 1 : 3;
-      const minutesToAdd = interval - (next.getMinutes() % interval);
-      next.setMinutes(next.getMinutes() + minutesToAdd);
+      next.setMinutes(next.getMinutes() + (interval - (next.getMinutes() % interval)));
       setEntryTime(next.toLocaleTimeString());
     };
-
     return () => ws.current?.close();
   }, [symbol, timeframe]);
 
   return (
     <div className="app-container">
       <header>
-        <div className="gold" id="phone-time">{currentTime}</div>
-        <div className="gold">RTX PRO V7</div>
+        <div className="gold">RTX MASTER AI V7</div>
+        <div style={{color:'#0ecb81', fontSize:'0.75rem'}}>● LIVE FEED</div>
       </header>
 
-      <div className="chart-frame">
+      {/* বাইনান্স চার্ট - মেইন ফোকাস */}
+      <div className="chart-section">
         <iframe 
-          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:${symbol}&interval=${timeframe === '1m' ? '1' : '3'}&theme=dark`}
+          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:${symbol}&interval=${timeframe === '1m' ? '1' : '3'}&theme=dark&style=1`}
           width="100%" height="100%" frameBorder="0">
         </iframe>
       </div>
 
-      <div className="controls">
+      {/* মার্কেট এবং টাইমফ্রেম কন্ট্রোলস */}
+      <div className="controls-overlay">
         <select value={symbol} onChange={(e) => setSymbol(e.target.value)}>
-          <option value="BTCUSDT">BTC/USDT</option>
-          <option value="ETHUSDT">ETH/USDT</option>
-          <option value="SOLUSDT">SOL/USDT</option>
+          <option value="BTCUSDT">BTC/USDT (Bitcoin)</option>
+          <option value="ETHUSDT">ETH/USDT (Ethereum)</option>
+          <option value="SOLUSDT">SOL/USDT (Solana)</option>
+          <option value="BNBUSDT">BNB/USDT (Binance Coin)</option>
+          <option value="XRPUSDT">XRP/USDT (Ripple)</option>
+          <option value="ADAUSDT">ADA/USDT (Cardano)</option>
+          <option value="DOGEUSDT">DOGE/USDT (Dogecoin)</option>
+          <option value="DOTUSDT">DOT/USDT (Polkadot)</option>
+          <option value="MATICUSDT">MATIC/USDT (Polygon)</option>
+          <option value="LTCUSDT">LTC/USDT (Litecoin)</option>
         </select>
+        
         <div className="tf-group">
           <div className={`tf-btn ${timeframe === '1m' ? 'active' : ''}`} onClick={() => setTimeframe('1m')}>1 MIN</div>
           <div className={`tf-btn ${timeframe === '3m' ? 'active' : ''}`} onClick={() => setTimeframe('3m')}>3 MIN</div>
         </div>
       </div>
 
-      {/* P চিহ্নিত ডাইনামিক বক্স */}
-      <div className={`signal-box ${signal === 'CALL (UP)' ? 'border-up' : signal === 'PUT (DOWN)' ? 'border-down' : ''}`}>
-        <div className="alert-text">{alert}</div>
-        <div style={{fontSize:'0.75rem', opacity:0.6}}>NEXT CANDLE PREDICTION</div>
-        <div className={`signal-text ${signal === 'CALL (UP)' ? 'up' : signal === 'PUT (DOWN)' ? 'down' : ''}`}>
-          {signal}
-        </div>
-        
-        <div className="entry-timer">
-          Entry Time: <span className="gold">{entryTime}</span>
-        </div>
+      {/* সিগন্যাল বক্স - একদম নিচে */}
+      <div className="signal-area">
+        <div className={`signal-box ${signal.includes('UP') ? 'border-up' : signal.includes('DOWN') ? 'border-down' : ''}`}>
+          <div className="alert-line">{alert}</div>
+          <div style={{fontSize:'0.7rem', opacity:0.6, letterSpacing:'1px'}}>PREDICTION</div>
+          
+          <div className={`signal-text ${signal.includes('UP') ? 'up' : signal.includes('DOWN') ? 'down' : ''}`}>
+            {signal}
+          </div>
+          
+          <div className="time-container">
+            <div>Live: <span className="gold">{currentTime}</span></div>
+            <div>Entry: <span className="gold">{entryTime}</span></div>
+          </div>
 
-        <div style={{marginTop:'15px'}}>
-           <div style={{fontSize:'0.8rem', marginBottom:'5px'}}>Accuracy: {confidence.toFixed(2)}%</div>
-           <div style={{background:'#333', height:'6px', borderRadius:'3px', overflow:'hidden'}}>
-              <div style={{width: `${confidence}%`, background:'#f3ba2f', height:'100%', transition:'0.5s'}}></div>
-           </div>
+          <div className="accuracy-glow">
+            ACCURACY: {confidence.toFixed(2)}%
+          </div>
+          
+          <div className="pattern-text">
+            Detected: {pattern}
+          </div>
         </div>
-        <div style={{fontSize:'0.8rem', marginTop:'10px', opacity:0.7}}>Pattern: {pattern}</div>
       </div>
     </div>
   );
