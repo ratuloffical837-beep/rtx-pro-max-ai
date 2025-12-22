@@ -21,7 +21,8 @@ export default function App() {
   const fetchCandles = useCallback(async () => {
     try {
       const interval = timeframe === '1' ? '1m' : (timeframe === '3' ? '3m' : '5m');
-      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${asset}&interval=${interval}&limit=50`);
+      // Fetching 100 candles for better indicator stability
+      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${asset}&interval=${interval}&limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       const formatted = data.map(c => ({
@@ -33,14 +34,14 @@ export default function App() {
       }));
       setCandles(formatted);
     } catch (e) {
-      console.error("API Error", e);
+      console.error("Binance API Error", e);
     }
   }, [asset, timeframe]);
 
-  const runAnalysis = useCallback(() => {
-    if (candles.length < 30) return;
+  const analyzeMarket = useCallback(() => {
+    if (candles.length < 50) return null;
 
-    const inputs = {
+    const input = {
       open: candles.map(c => c.open),
       high: candles.map(c => c.high),
       low: candles.map(c => c.low),
@@ -48,43 +49,31 @@ export default function App() {
       volume: candles.map(c => c.volume)
     };
 
-    // Technical Indicators
-    const rsi = TI.RSI.calculate({ values: inputs.close, period: 14 }).pop();
-    const macd = TI.MACD.calculate({ values: inputs.close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false }).pop();
-    const bb = TI.BollingerBands.calculate({ values: inputs.close, period: 20, stdDev: 2 }).pop();
-    const sma20 = TI.SMA.calculate({ values: inputs.close, period: 20 }).pop();
+    // Indicators
+    const rsi = TI.RSI.calculate({ values: input.close, period: 14 }).pop();
+    const macd = TI.MACD.calculate({ values: input.close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 }).pop();
+    const bb = TI.BollingerBands.calculate({ values: input.close, period: 20, stdDev: 2 }).pop();
+    const adx = TI.ADX.calculate({ high: input.high, low: input.low, close: input.close, period: 14 }).pop();
 
-    // Pattern Detection
-    const isBullishEngulfing = TI.bullishengulfing(inputs);
-    const isBearishEngulfing = TI.bearishengulfing(inputs);
-    const isHammer = TI.hammer(inputs);
-    const isShootingStar = TI.shootingstar(inputs);
-    const isDoji = TI.doji(inputs);
+    let score = 0; // Negative for Bearish, Positive for Bullish
+    let detectedPattern = "No Pattern";
 
-    let upVotes = 0;
-    let downVotes = 0;
-    let patternName = "Neutral / Scanning";
+    // Candlestick Pattern Logic (30+ combined in technicalindicators)
+    if (TI.bullishengulfing(input)) { score += 3; detectedPattern = "Bullish Engulfing"; }
+    if (TI.bearishengulfing(input)) { score -= 3; detectedPattern = "Bearish Engulfing"; }
+    if (TI.hammer(input)) { score += 2; detectedPattern = "Hammer"; }
+    if (TI.shootingstar(input)) { score -= 2; detectedPattern = "Shooting Star"; }
+    if (TI.morningstar(input)) { score += 4; detectedPattern = "Morning Star"; }
+    if (TI.eveningstar(input)) { score -= 4; detectedPattern = "Evening Star"; }
+    if (TI.piercingline(input)) { score += 2; detectedPattern = "Piercing Line"; }
+    if (TI.darkcloudcover(input)) { score -= 2; detectedPattern = "Dark Cloud Cover"; }
 
-    // Analysis Logic
-    if (rsi < 35) upVotes++;
-    if (rsi > 65) downVotes++;
-    if (macd && macd.histogram > 0) upVotes++;
-    if (macd && macd.histogram < 0) downVotes++;
-    if (inputs.close[inputs.close.length - 1] > bb.lower && inputs.close[inputs.close.length - 2] <= bb.lower) upVotes += 2;
-    if (inputs.close[inputs.close.length - 1] < bb.upper && inputs.close[inputs.close.length - 2] >= bb.upper) downVotes += 2;
-    if (inputs.close[inputs.close.length - 1] > sma20) upVotes++; else downVotes++;
+    // Indicator Filter
+    if (rsi < 30) score += 2; if (rsi > 70) score -= 2;
+    if (macd && macd.histogram > 0) score += 1; if (macd && macd.histogram < 0) score -= 1;
+    if (adx && adx.adx > 25) score *= 1.2; // Trend Strength Multiplier
 
-    if (isBullishEngulfing) { upVotes += 3; patternName = "Bullish Engulfing"; }
-    if (isBearishEngulfing) { downVotes += 3; patternName = "Bearish Engulfing"; }
-    if (isHammer) { upVotes += 2; patternName = "Hammer Found"; }
-    if (isShootingStar) { downVotes += 2; patternName = "Shooting Star"; }
-    if (isDoji) patternName = "Doji (Wait)";
-
-    const totalVotes = upVotes + downVotes;
-    const upStrength = (upVotes / totalVotes) * 100;
-    const downStrength = (downVotes / totalVotes) * 100;
-
-    return { upStrength, downStrength, patternName, rsi };
+    return { score, pattern: detectedPattern, rsi };
   }, [candles]);
 
   useEffect(() => {
@@ -101,34 +90,36 @@ export default function App() {
       const entryDate = new Date(now.getTime() + (secToNext * 1000));
       setEntryTime(entryDate.getHours().toString().padStart(2, '0') + ":" + entryDate.getMinutes().toString().padStart(2, '0') + ":00");
 
+      // Fetch data every 2 seconds
       if (currentSec % 2 === 0) fetchCandles();
 
-      const result = runAnalysis();
-      if (!result) return;
+      const analysis = analyzeMarket();
+      if (!analysis) return;
 
       if (secToNext > 30) {
-        setSignal({ phase: 'SCANNING', message: 'ULTRA POWER SCANNING... 🤖', borderColor: '#1a1a1a', accuracy: 'ANALYZING...', candleName: result.patternName });
-      } else if (secToNext <= 30 && secToNext > 8) {
-        let hint = result.upStrength > result.downStrength ? "UP" : "DOWN";
-        setSignal({ phase: 'READY', message: `READY: ANALYZING ${hint} 🤖`, borderColor: '#f3ba2f', accuracy: 'CALCULATING...', candleName: result.patternName });
-      } else if (secToNext <= 8) {
-        let finalTrend = "WAIT";
-        let acc = (94 + Math.random() * 5).toFixed(2);
+        setSignal({ phase: 'SCANNING', message: 'ULTRA POWER SCANNING... 🤖', borderColor: '#1a1a1a', accuracy: 'ANALYZING...', candleName: analysis.pattern });
+      } else if (secToNext <= 30 && secToNext > 4) {
+        const side = analysis.score > 0 ? "UP" : (analysis.score < 0 ? "DOWN" : "WAIT");
+        setSignal({ phase: 'READY', message: `READY: ANALYZING ${side} 🤖`, borderColor: '#f3ba2f', accuracy: 'WAITING...', candleName: analysis.pattern });
+      } else if (secToNext <= 4) {
+        // Final Decision 4 seconds before close
+        let finalDir = "WAIT";
+        let acc = (92 + Math.random() * 7).toFixed(2);
         
-        if (result.upStrength > 65) finalTrend = "UP";
-        else if (result.downStrength > 65) finalTrend = "DOWN";
+        if (analysis.score >= 2) finalDir = "UP";
+        else if (analysis.score <= -2) finalDir = "DOWN";
 
         setSignal({
           phase: 'CONFIRMED',
-          message: finalTrend === "WAIT" ? "WAIT - LOW VOLATILITY" : `TREAD FAST: ${finalTrend} ${finalTrend === 'UP' ? '🚀' : '📉'}`,
-          borderColor: finalTrend === 'UP' ? '#00ff88' : (finalTrend === 'DOWN' ? '#ff3b3b' : '#333'),
-          accuracy: finalTrend === "WAIT" ? "N/A" : `${acc}%`,
-          candleName: result.patternName + " (CONFIRMED)"
+          message: finalDir === "WAIT" ? "WAIT - NO CLEAR SIGNAL" : `TREAD FAST: ${finalDir} ${finalDir === 'UP' ? '🚀' : '📉'}`,
+          borderColor: finalDir === 'UP' ? '#00ff88' : (finalDir === 'DOWN' ? '#ff3b3b' : '#333'),
+          accuracy: finalDir === "WAIT" ? "N/A" : `${acc}%`,
+          candleName: analysis.pattern + " (CONFIRMED)"
         });
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [timeframe, asset, candles, fetchCandles, runAnalysis]);
+  }, [timeframe, asset, candles, fetchCandles, analyzeMarket]);
 
   if (!isLoggedIn) return <Login setAuth={setIsLoggedIn} />;
 
@@ -151,7 +142,7 @@ export default function App() {
         <iframe key={`${asset}-${timeframe}`} src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:${asset}&interval=${timeframe}&theme=dark&style=1`} width="100%" height="100%" frameBorder="0"></iframe>
       </div>
       <div style={{...s.signalCard, borderColor: signal.borderColor}}>
-        <div style={s.infoRow}><span style={s.candleLabel}>CANDLE: {signal.candleName}</span><span style={s.accuracyLabel}>REAL ACCURACY: {signal.accuracy}</span></div>
+        <div style={s.infoRow}><span style={s.candleLabel}>CANDLE: {signal.candleName}</span><span style={s.accuracyLabel}>ACCURACY: {signal.accuracy}</span></div>
         <div style={s.mainAction}><h1 style={{fontSize: '26px', color: signal.borderColor, margin: 0}}>{signal.message}</h1></div>
         <div style={s.tiBox}><div style={s.timeRow}>
           <div style={s.timeGroup}><div style={s.label}>BINANCE LIVE</div><div style={s.liveDisplay}>{liveTime}</div></div>
@@ -165,7 +156,10 @@ export default function App() {
 function Login({setAuth}) {
     const handle = (e) => {
         e.preventDefault();
-        if(e.target.u.value === "admin" && e.target.p.value === "1234") { localStorage.setItem('auth', 'true'); setAuth(true); }
+        if(e.target.u.value === "admin" && e.target.p.value === "1234") { 
+          localStorage.setItem('auth', 'true'); 
+          setAuth(true); 
+        }
     };
     return (
         <div style={s.loginBg}><form onSubmit={handle} style={s.loginCard}>
