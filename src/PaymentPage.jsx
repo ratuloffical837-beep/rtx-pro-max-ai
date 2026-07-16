@@ -6,7 +6,7 @@
 import React, { useState } from 'react'
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { C, CONTACT } from './constants.js'
+import { C, CONTACT, BACKEND_URL } from './constants.js'
 
 export default function PaymentPage({ onClose }) {
   const [phone, setPhone] = useState('')
@@ -52,11 +52,15 @@ export default function PaymentPage({ onClose }) {
       // Notify backend so the admin gets a Telegram approval prompt. The
       // backend never sees market/signal data — only this payment record.
       try {
-        await fetch('/api/notify-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ paymentId: docRef.id, phone: phone.trim(), trxId: trxId.trim() }),
-        })
+        if (!BACKEND_URL) {
+          console.error('PaymentPage: VITE_BACKEND_URL is not set — cannot notify admin.')
+        } else {
+          await fetch(`${BACKEND_URL}/api/notify-payment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paymentId: docRef.id, phone: phone.trim(), trxId: trxId.trim() }),
+          })
+        }
       } catch (notifyErr) {
         // Payment record is already saved in Firestore even if the notify
         // ping fails — the admin can still find it manually, so don't block
@@ -250,4 +254,4 @@ const styles = {
     fontWeight: 800,
     cursor: 'pointer',
   },
-  }
+        }
