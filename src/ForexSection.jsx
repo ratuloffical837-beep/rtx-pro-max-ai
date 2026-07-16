@@ -2,7 +2,7 @@
 // original crypto app. Single unified Forex view, no Spot/Futures toggle.
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { C, FREE_TRIAL_LIMIT, SIGNAL_MODES } from './constants.js'
+import { C, FREE_TRIAL_LIMIT, SIGNAL_MODES, BACKEND_URL } from './constants.js'
 import { FOREX_MARKETS, MARKET_CATEGORIES, getMarketsByCategory, findMarketByName } from './markets.js'
 import { isForexMarketOpen, nextOpenDayLabel } from './marketHours.js'
 import { getApiKey, fetchAllTimeframes, fetchLivePrice } from './twelveDataClient.js'
@@ -170,7 +170,15 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
       if (!isPremium) {
         setSignalsUsed((prev) => prev + 1)
         try {
-          await fetch('/api/check-status', { method: 'POST' })
+          if (!BACKEND_URL) {
+            console.error('ForexSection: VITE_BACKEND_URL is not set — trial counter will not sync to the server.')
+          } else {
+            await fetch(`${BACKEND_URL}/api/check-status`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ consume: true }),
+            })
+          }
         } catch (e) {
           console.error('ForexSection: check-status ping failed:', e.message)
         }
@@ -536,4 +544,4 @@ const styles = {
     cursor: 'pointer',
     fontSize: 13,
   },
-    }
+            }
