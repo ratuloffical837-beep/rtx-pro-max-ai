@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /forex_users/{userId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /forex_payments/{paymentId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+    match /forex_trials/{userId} {
+      allow read, create, update: if true;
+      allow delete: if false;
+    }
+  }
+}
