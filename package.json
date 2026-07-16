@@ -1,0 +1,28 @@
+{
+  "name": "rtx-pro-max-forex",
+  "private": true,
+  "version": "1.0.0",
+  "description": "RTX Pro Max — Forex Edition. Telegram Mini App: structure-based Forex signal generator (React/Vite frontend + minimal Node/Express backend for payment/trial).",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "firebase": "^10.12.2",
+    "firebase-admin": "^12.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
