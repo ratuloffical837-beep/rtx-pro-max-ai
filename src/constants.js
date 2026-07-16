@@ -3,6 +3,13 @@
 // here, never hardcode these values again. If a number/link ever changes,
 // this is the only file that needs editing.
 
+// 🔴 The frontend and backend are deployed as two SEPARATE Render services
+// (different domains), so every backend API call must use an ABSOLUTE URL —
+// a relative fetch('/api/...') would hit the frontend's own domain instead
+// and silently fail. Set VITE_BACKEND_URL in the frontend service's env vars
+// to your backend service's URL, e.g. https://rtx-pro-max-ai.onrender.com
+export const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '')
+
 export const CONTACT = {
   support: 'https://t.me/ratulhossain56',
   channel: 'https://t.me/ratulhossain4241',
