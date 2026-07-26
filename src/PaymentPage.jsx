@@ -2,11 +2,25 @@
 // original crypto app. Writes a pending payment doc to Firestore and pings
 // the backend so the admin gets a Telegram approval prompt. Price comes only
 // from constants.js — never hardcoded here.
+//
+// ── FIXES IN THIS VERSION ───────────────────────────────────────────────
+// 🔴 The payment doc now includes `userId` (the Telegram user's real id, via
+// telegramUser.js). Before, no file anywhere captured this id, so
+// server.js's /webhook/:secret approve handler had nothing to key Premium
+// status on — it fell back to `phone`, which never matched what
+// /api/check-status looked up. That mismatch is the reason approving a
+// payment never actually unlocked Premium in the app.
+// 🔴 If the app isn't running inside real Telegram (isRealTelegramUser ===
+// false), we warn the person before they pay — a fallback browser id won't
+// survive a cache clear or a different device, so Premium tied to it is
+// fragile. This is a heads-up, not a hard block, since local dev/testing
+// still needs to work.
 
 import React, { useState } from 'react'
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { C, CONTACT, BACKEND_URL } from './constants.js'
+import { getTelegramUser } from './telegramUser.js'
 
 export default function PaymentPage({ onClose }) {
   const [phone, setPhone] = useState('')
@@ -16,6 +30,11 @@ export default function PaymentPage({ onClose }) {
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+
+  // 🔴 Resolved once per mount — this is the id everything downstream (the
+  // Firestore doc, the admin's Telegram message, /webhook/:secret's approve
+  // handler) will use to identify this person.
+  const { userId, isRealTelegramUser } = getTelegramUser()
 
   function handleCopyNumber() {
     try {
@@ -42,6 +61,7 @@ export default function PaymentPage({ onClose }) {
     setSubmitting(true)
     try {
       const docRef = await addDoc(collection(db, 'forex_payments'), {
+        userId, // 🔴 the field server.js's approve handler now relies on
         phone: phone.trim(),
         amount: Number(amount) || CONTACT.monthlyAmount,
         trxId: trxId.trim(),
@@ -54,12 +74,21 @@ export default function PaymentPage({ onClose }) {
       try {
         if (!BACKEND_URL) {
           console.error('PaymentPage: VITE_BACKEND_URL is not set — cannot notify admin.')
+          setError(
+            '⚠️ পেমেন্ট তথ্য সংরক্ষিত হয়েছে, কিন্তু সার্ভার কনফিগারেশন সমস্যার কারণে এডমিনকে স্বয়ংক্রিয়ভাবে জানানো যায়নি। সাপোর্টে যোগাযোগ করুন।'
+          )
         } else {
-          await fetch(`${BACKEND_URL}/api/notify-payment`, {
+          const res = await fetch(`${BACKEND_URL}/api/notify-payment`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ paymentId: docRef.id, phone: phone.trim(), trxId: trxId.trim() }),
+            body: JSON.stringify({ paymentId: docRef.id, userId, phone: phone.trim(), trxId: trxId.trim() }),
           })
+          const data = await res.json().catch(() => ({}))
+          if (!data.ok) {
+            // Payment is still saved — just let the person know the admin
+            // notification may be delayed, so support contact still helps.
+            console.error('PaymentPage: notify-payment reported failure:', data.warning)
+          }
         }
       } catch (notifyErr) {
         // Payment record is already saved in Firestore even if the notify
@@ -88,6 +117,16 @@ export default function PaymentPage({ onClose }) {
             ✕
           </button>
         </div>
+
+        {/* 🔴 Warn if not opened inside real Telegram — Premium tied to a
+            fallback browser id won't survive a cache clear or new device. */}
+        {!isRealTelegramUser && !submitted && (
+          <div style={styles.telegramWarnBox}>
+            ⚠️ এই অ্যাপটি Telegram-এর ভেতর থেকে খোলা হয়নি বলে মনে হচ্ছে। পেমেন্ট নিশ্চিত করার আগে
+            Telegram বট থেকে Mini App-টি খুলুন, নাহলে আপনার Premium স্ট্যাটাস সঠিকভাবে ট্র্যাক নাও
+            হতে পারে।
+          </div>
+        )}
 
         {submitted ? (
           <div style={styles.successBox}>
@@ -192,6 +231,17 @@ const styles = {
     fontSize: 18,
     cursor: 'pointer',
   },
+  telegramWarnBox: {
+    background: `${C.red}18`,
+    border: `1px solid ${C.red}55`,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 12,
+    color: C.red,
+    fontWeight: 600,
+    lineHeight: 1.6,
+    marginBottom: 16,
+  },
   hero: { textAlign: 'center', marginBottom: 18 },
   heroTitle: { fontSize: 22, fontWeight: 800, color: C.text },
   heroSubtitle: { fontSize: 12, color: C.muted, marginTop: 6 },
@@ -254,4 +304,4 @@ const styles = {
     fontWeight: 800,
     cursor: 'pointer',
   },
-        }
+    }
