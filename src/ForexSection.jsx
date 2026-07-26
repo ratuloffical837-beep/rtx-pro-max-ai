@@ -1,5 +1,14 @@
 // ForexSection.jsx — replaces SpotSection.jsx + FuturesSection.jsx from the
 // original crypto app. Single unified Forex view, no Spot/Futures toggle.
+//
+// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
+// 🔴 The `consume: true` call to /api/check-status never sent `userId` —
+// server.js requires it and returns 400 without it, so every free-trial
+// signal generation silently failed to record its usage on the backend
+// (the local `signalsUsed` state still incremented in the UI, but the
+// backend counter never moved, meaning a cleared cache or a second device
+// would reset the "5 free signals" limit). Now uses telegramUser.js's
+// userId, same as App.jsx.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { C, FREE_TRIAL_LIMIT, SIGNAL_MODES, BACKEND_URL } from './constants.js'
@@ -7,6 +16,7 @@ import { FOREX_MARKETS, MARKET_CATEGORIES, getMarketsByCategory, findMarketByNam
 import { isForexMarketOpen, nextOpenDayLabel } from './marketHours.js'
 import { getApiKey, fetchAllTimeframes, fetchLivePrice } from './twelveDataClient.js'
 import { generateSignal } from './signalEngine.js'
+import { getTelegramUser } from './telegramUser.js'
 import SignalCard from './SignalCard.jsx'
 
 export default function ForexSection({ selectedModeId, isPremium, signalsUsed, setSignalsUsed, onRequirePremium }) {
@@ -173,11 +183,17 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
           if (!BACKEND_URL) {
             console.error('ForexSection: VITE_BACKEND_URL is not set — trial counter will not sync to the server.')
           } else {
-            await fetch(`${BACKEND_URL}/api/check-status`, {
+            // 🔴 userId is now required by server.js — without it the call
+            // returned 400 and the backend's trial counter never moved.
+            const { userId } = getTelegramUser()
+            const res = await fetch(`${BACKEND_URL}/api/check-status`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ consume: true }),
+              body: JSON.stringify({ userId, consume: true }),
             })
+            if (!res.ok) {
+              console.error('ForexSection: check-status consume call returned', res.status)
+            }
           }
         } catch (e) {
           console.error('ForexSection: check-status ping failed:', e.message)
@@ -544,4 +560,4 @@ const styles = {
     cursor: 'pointer',
     fontSize: 13,
   },
-            }
+}
