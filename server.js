@@ -1,10 +1,27 @@
 // server.js — 🔴 payment/trial ONLY. Zero Twelve Data calls, zero API-key
 // handling, zero signal-generation logic. If any of that logic ends up here,
 // it's wrong — it belongs in the frontend (twelveDataClient.js / signalEngine.js).
+//
+// ── FIXES IN THIS VERSION ───────────────────────────────────────────────
+// 1. 🔴 Telegram webhook is now REGISTERED automatically on boot via
+//    `setWebhook`. Before, nothing ever told Telegram where to send
+//    /approve_xxx and /reject_xxx admin messages, so the bot never called
+//    our /webhook/:secret route at all — the admin's commands went nowhere.
+// 2. 🔴 notify-payment now actually checks Telegram's API response. Before,
+//    a bad BOT_TOKEN / ADMIN_TELEGRAM_ID / admin never having pressed
+//    "Start" on the bot would fail silently and nobody would know why no
+//    notification arrived.
+// 3. 🔴 Premium status is now saved to forex_users/{userId} — the same
+//    Telegram userId the frontend uses in /api/check-status. Before, this
+//    was saved under forex_users/{phone}, which never matched the id
+//    check-status queried by, so approved users never actually became
+//    Premium in the app.
+// 4. /api/notify-payment and the webhook now require/pass `userId` end to
+//    end: PaymentPage.jsx -> Firestore forex_payments doc -> Telegram admin
+//    message -> /approve_xxx handler -> forex_users/{userId}.
 
 const express = require('express')
 const cors = require('cors')
-const crypto = require('crypto')
 
 let admin = null
 let db = null
@@ -31,6 +48,8 @@ app.use(express.json())
 const FREE_TRIAL_LIMIT = 5
 const BOT_TOKEN = process.env.BOT_TOKEN
 const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET
+const SELF_URL = process.env.RENDER_EXTERNAL_URL
 
 // ---------------------------------------------------------------------------
 // GET /health
@@ -39,6 +58,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     firebase: db ? 'connected' : 'disconnected',
+    webhookConfigured: !!(BOT_TOKEN && WEBHOOK_SECRET && SELF_URL),
     time: new Date().toISOString(),
   })
 })
@@ -66,6 +86,8 @@ app.post('/api/check-status', async (req, res) => {
       await trialRef.set({ signalsUsed: 0, createdAt: admin.firestore.FieldValue.serverTimestamp() })
     }
 
+    // 🔴 Premium is now looked up by the SAME userId the frontend sends —
+    // this is the id that /webhook/:secret writes to after admin approval.
     const userRef = db.collection('forex_users').doc(userId)
     const userSnap = await userRef.get()
     const isPremium = userSnap.exists && userSnap.data().premiumUntil && userSnap.data().premiumUntil.toDate() > new Date()
@@ -90,38 +112,61 @@ app.post('/api/check-status', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/notify-payment
-// Body: { paymentId, phone, trxId }
+// Body: { paymentId, userId, phone, trxId }
 // Pings the admin on Telegram so they can approve/reject the payment that
 // the frontend already wrote to forex_payments/{paymentId} in Firestore.
+//
+// 🔴 This now VERIFIES Telegram actually accepted the message and returns a
+// clear ok/warning to the caller instead of silently swallowing failures.
 // ---------------------------------------------------------------------------
 app.post('/api/notify-payment', async (req, res) => {
+  const { paymentId, userId, phone, trxId } = req.body || {}
+  if (!paymentId) return res.status(400).json({ error: 'paymentId is required' })
+
+  if (!BOT_TOKEN || !ADMIN_TELEGRAM_ID) {
+    console.error('BOT_TOKEN / ADMIN_TELEGRAM_ID not set — cannot notify admin.')
+    return res.json({
+      ok: false,
+      warning:
+        'Payment record was saved, but the server is missing BOT_TOKEN or ADMIN_TELEGRAM_ID, so no Telegram notification could be sent. Check Render environment variables.',
+    })
+  }
+
+  const text =
+    `💰 নতুন পেমেন্ট রিকোয়েস্ট\n\n` +
+    `Payment ID: ${paymentId}\n` +
+    `Telegram User ID: ${userId || 'N/A'}\n` +
+    `Phone: ${phone || 'N/A'}\n` +
+    `TrxID: ${trxId || 'N/A'}\n\n` +
+    `অনুমোদন করতে /approve_${paymentId} অথবা প্রত্যাখ্যান করতে /reject_${paymentId} পাঠান।`
+
   try {
-    const { paymentId, phone, trxId } = req.body || {}
-    if (!paymentId) return res.status(400).json({ error: 'paymentId is required' })
+    const tgRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: ADMIN_TELEGRAM_ID, text }),
+    })
+    const tgData = await tgRes.json()
 
-    if (BOT_TOKEN && ADMIN_TELEGRAM_ID) {
-      const text =
-        `💰 নতুন পেমেন্ট রিকোয়েস্ট\n\n` +
-        `Payment ID: ${paymentId}\n` +
-        `Phone: ${phone || 'N/A'}\n` +
-        `TrxID: ${trxId || 'N/A'}\n\n` +
-        `অনুমোদন করতে /approve_${paymentId} অথবা প্রত্যাখ্যান করতে /reject_${paymentId} পাঠান।`
-
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: ADMIN_TELEGRAM_ID, text }),
+    // 🔴 Telegram's sendMessage can return HTTP 200 with { ok: false } (e.g.
+    // "chat not found" if the admin never pressed Start on the bot, or a bad
+    // ADMIN_TELEGRAM_ID) — checking tgRes.ok alone would miss this.
+    if (!tgRes.ok || !tgData.ok) {
+      console.error('Telegram sendMessage rejected:', tgData.description || tgData)
+      return res.json({
+        ok: false,
+        warning: `Payment record was saved, but Telegram did not deliver the admin notification (${
+          tgData.description || 'unknown reason'
+        }). Make sure ADMIN_TELEGRAM_ID is correct and the admin has pressed "Start" on the bot at least once.`,
       })
-    } else {
-      console.error('BOT_TOKEN / ADMIN_TELEGRAM_ID not set — skipping Telegram notify.')
     }
 
-    res.json({ ok: true })
+    return res.json({ ok: true })
   } catch (e) {
     console.error('POST /api/notify-payment failed:', e.message)
     // Don't fail the request hard — the payment record already exists in
     // Firestore even if this notification ping fails.
-    res.json({ ok: false, warning: 'Notification failed, but payment record was saved.' })
+    return res.json({ ok: false, warning: 'Notification request failed, but payment record was saved.' })
   }
 })
 
@@ -131,7 +176,7 @@ app.post('/api/notify-payment', async (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/webhook/:secret', async (req, res) => {
   try {
-    if (req.params.secret !== process.env.WEBHOOK_SECRET) {
+    if (req.params.secret !== WEBHOOK_SECRET) {
       return res.status(403).json({ error: 'Forbidden' })
     }
     if (!db) return res.status(503).json({ error: 'Database unavailable' })
@@ -146,16 +191,24 @@ app.post('/webhook/:secret', async (req, res) => {
       const paymentId = approveMatch[1]
       const paymentRef = db.collection('forex_payments').doc(paymentId)
       const paymentSnap = await paymentRef.get()
+
       if (paymentSnap.exists) {
         const payment = paymentSnap.data()
         await paymentRef.update({ status: 'approved' })
 
-        const premiumUntil = new Date()
-        premiumUntil.setDate(premiumUntil.getDate() + 30)
-        await db
-          .collection('forex_users')
-          .doc(payment.phone || paymentId)
-          .set({ premiumUntil }, { merge: true })
+        // 🔴 THE CORE FIX: premium is now keyed by the Telegram userId that
+        // PaymentPage.jsx saved onto the payment doc — the exact same id
+        // /api/check-status looks up. Previously this used `payment.phone`,
+        // which never matched, so approval never actually unlocked Premium.
+        if (payment.userId) {
+          const premiumUntil = new Date()
+          premiumUntil.setDate(premiumUntil.getDate() + 30)
+          await db.collection('forex_users').doc(payment.userId).set({ premiumUntil }, { merge: true })
+        } else {
+          console.error(
+            `Payment ${paymentId} has no userId field — cannot grant Premium. This payment predates the userId fix or PaymentPage failed to attach it.`
+          )
+        }
       }
     } else if (rejectMatch) {
       const paymentId = rejectMatch[1]
@@ -168,6 +221,42 @@ app.post('/webhook/:secret', async (req, res) => {
     res.status(500).json({ error: 'Internal error' })
   }
 })
+
+// ---------------------------------------------------------------------------
+// 🔴 Auto-register the Telegram webhook on boot.
+// Before this fix, nothing ever called Telegram's `setWebhook` API, so
+// Telegram had no idea our /webhook/:secret route existed — admin commands
+// like /approve_xxx were just normal messages that went nowhere.
+// ---------------------------------------------------------------------------
+async function registerTelegramWebhook() {
+  if (!BOT_TOKEN || !WEBHOOK_SECRET || !SELF_URL) {
+    console.error(
+      '⚠️ Skipping Telegram webhook registration — BOT_TOKEN, WEBHOOK_SECRET, or RENDER_EXTERNAL_URL is missing. ' +
+        'Admin /approve_xxx and /reject_xxx commands will NOT work until all three are set.'
+    )
+    return
+  }
+
+  const webhookUrl = `${SELF_URL.replace(/\/$/, '')}/webhook/${WEBHOOK_SECRET}`
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: webhookUrl }),
+    })
+    const data = await res.json()
+
+    if (!res.ok || !data.ok) {
+      console.error('🔥 Telegram setWebhook FAILED:', data.description || data)
+      return
+    }
+
+    console.log(`✅ Telegram webhook registered: ${webhookUrl}`)
+  } catch (e) {
+    console.error('🔥 Telegram setWebhook request failed:', e.message)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Auto-expire check — hourly sweep for expired Premium users.
@@ -188,7 +277,6 @@ setInterval(async () => {
 // ---------------------------------------------------------------------------
 // Self-ping — keeps free-tier hosting awake.
 // ---------------------------------------------------------------------------
-const SELF_URL = process.env.RENDER_EXTERNAL_URL
 if (SELF_URL) {
   setInterval(() => {
     fetch(`${SELF_URL}/health`).catch((e) => console.error('Self-ping failed:', e.message))
@@ -198,4 +286,5 @@ if (SELF_URL) {
 const PORT = process.env.PORT || 5000
 app.listen(PORT, () => {
   console.log(`🚀 RTX Pro Max Forex backend running on port ${PORT}`)
+  registerTelegramWebhook()
 })
