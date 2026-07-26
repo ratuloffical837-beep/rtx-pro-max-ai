@@ -276,11 +276,27 @@ setInterval(async () => {
 
 // ---------------------------------------------------------------------------
 // Self-ping — keeps free-tier hosting awake.
+// 🔴 Render's free tier spins a web service down after ~15 minutes of no
+// inbound traffic. Pinging every 10 minutes left too thin a margin (a slow
+// or delayed tick could let the service fall asleep before the next ping).
+// Every 5 minutes keeps comfortably inside that window.
 // ---------------------------------------------------------------------------
+const SELF_PING_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+
 if (SELF_URL) {
   setInterval(() => {
-    fetch(`${SELF_URL}/health`).catch((e) => console.error('Self-ping failed:', e.message))
-  }, 10 * 60 * 1000)
+    fetch(`${SELF_URL}/health`)
+      .then((res) => {
+        if (!res.ok) {
+          console.error(`Self-ping got non-OK status: ${res.status}`)
+        }
+      })
+      .catch((e) => console.error('Self-ping failed:', e.message))
+  }, SELF_PING_INTERVAL_MS)
+} else {
+  console.error(
+    '⚠️ RENDER_EXTERNAL_URL not set — self-ping is disabled, so this service may spin down after ~15 minutes of inactivity on Render\'s free tier.'
+  )
 }
 
 const PORT = process.env.PORT || 5000
