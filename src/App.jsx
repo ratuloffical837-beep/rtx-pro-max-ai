@@ -2,35 +2,101 @@
 // 🔴 There is only ONE market type (Forex), so this renders <ForexSection />
 // directly below the header — no Spot/Futures tab switcher exists anywhere
 // in this file or below it.
+//
+// ── FIXES IN THIS VERSION ───────────────────────────────────────────────
+// 🔴 Before, isPremium/signalsUsed were declared with a comment saying
+// they'd be "populated from the backend's /api/check-status call" — but no
+// code anywhere actually did that. Every reload silently reset the person
+// to isPremium=false, signalsUsed=0, even for a paying Premium user. This
+// version calls /api/check-status on mount (via telegramUser.js's userId)
+// and keeps state in sync with the backend, which is the real source of
+// truth after server.js's userId-based approval fix.
+// 🔴 initTelegramWebApp() is now called once on boot so Telegram knows the
+// Mini App is ready (tg.ready()/tg.expand()) — this was never called before.
 
 import React, { useEffect, useState } from 'react'
-import { C, CONTACT, FREE_TRIAL_LIMIT, DEFAULT_MODE_ID, SIGNAL_MODES } from './constants.js'
+import { C, CONTACT, FREE_TRIAL_LIMIT, DEFAULT_MODE_ID, SIGNAL_MODES, BACKEND_URL } from './constants.js'
 import ForexSection from './ForexSection.jsx'
 import SettingsModal from './SettingsModal.jsx'
 import PaymentPage from './PaymentPage.jsx'
+import { initTelegramWebApp, getTelegramUser } from './telegramUser.js'
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [selectedModeId, setSelectedModeId] = useState(DEFAULT_MODE_ID)
 
-  // Premium / trial state. isPremium and signalsUsed are populated from the
-  // backend's /api/check-status call (owned by ForexSection / a future
-  // useTrialStatus hook) — this component only renders what it's given and
-  // defaults to a safe "not premium, 0 used" state on first paint.
+  // Premium / trial state — now genuinely loaded from the backend below,
+  // not just a hopeful comment. Defaults to a safe "not premium, 0 used"
+  // state only until the /api/check-status call resolves.
   const [isPremium, setIsPremium] = useState(false)
   const [signalsUsed, setSignalsUsed] = useState(0)
+  const [statusLoading, setStatusLoading] = useState(true)
+  const [statusError, setStatusError] = useState('')
 
   useEffect(() => {
+    // Tell Telegram the Mini App is ready — unlocks expand/theme behavior.
+    initTelegramWebApp()
+
     try {
       const saved = localStorage.getItem('rtx_selected_mode')
       if (saved && SIGNAL_MODES.some((m) => m.id === saved)) {
         setSelectedModeId(saved)
       }
     } catch (e) {
-      // localStorage unavailable (e.g. private browsing) — fall back to default mode silently
-      // eslint-disable-next-line no-console
       console.error('Could not read rtx_selected_mode from localStorage:', e.message)
+    }
+  }, [])
+
+  // 🔴 Load real premium/trial status from the backend on boot. This is the
+  // piece that was missing entirely before — without it, a Premium user
+  // reopening the app always looked like a fresh free-trial user.
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadStatus() {
+      setStatusLoading(true)
+      setStatusError('')
+
+      if (!BACKEND_URL) {
+        console.error('App: VITE_BACKEND_URL is not set — cannot load premium/trial status.')
+        if (!cancelled) {
+          setStatusError('সার্ভার কনফিগারেশন সমস্যা — Premium স্ট্যাটাস লোড করা যায়নি।')
+          setStatusLoading(false)
+        }
+        return
+      }
+
+      try {
+        const { userId } = getTelegramUser()
+        const res = await fetch(`${BACKEND_URL}/api/check-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+        })
+
+        if (!res.ok) {
+          throw new Error(`check-status returned ${res.status}`)
+        }
+
+        const data = await res.json()
+        if (!cancelled) {
+          setIsPremium(!!data.isPremium)
+          setSignalsUsed(typeof data.signalsUsed === 'number' ? data.signalsUsed : 0)
+        }
+      } catch (e) {
+        console.error('App: failed to load premium/trial status:', e.message)
+        if (!cancelled) {
+          setStatusError('Premium স্ট্যাটাস লোড করা যায়নি — ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।')
+        }
+      } finally {
+        if (!cancelled) setStatusLoading(false)
+      }
+    }
+
+    loadStatus()
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -47,7 +113,9 @@ export default function App() {
           </div>
 
           <div style={styles.headerRight}>
-            {isPremium ? (
+            {statusLoading ? (
+              <span style={styles.loadingBadge}>...</span>
+            ) : isPremium ? (
               <span style={styles.premiumBadge}>⭐ PREMIUM</span>
             ) : (
               <span style={styles.trialBadge}>🎁 {signalsRemaining}/{FREE_TRIAL_LIMIT}</span>
@@ -62,7 +130,9 @@ export default function App() {
           </div>
         </div>
 
-        {!isPremium && (
+        {statusError && <div style={styles.statusErrorBanner}>⚠️ {statusError}</div>}
+
+        {!statusLoading && !isPremium && (
           <button style={styles.upgradeBanner} onClick={() => setPaymentOpen(true)}>
             🚀 Premium আনলক করুন — ৳{CONTACT.monthlyAmount}/মাস · সীমাহীন সিগন্যাল
           </button>
@@ -106,7 +176,33 @@ export default function App() {
         />
       )}
 
-      {paymentOpen && <PaymentPage onClose={() => setPaymentOpen(false)} />}
+      {paymentOpen && (
+        <PaymentPage
+          onClose={() => {
+            setPaymentOpen(false)
+            // 🔴 Re-check status when the payment sheet closes, in case the
+            // admin already approved while the person was on this screen.
+            setStatusLoading(true)
+            const { userId } = getTelegramUser()
+            if (BACKEND_URL) {
+              fetch(`${BACKEND_URL}/api/check-status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId }),
+              })
+                .then((res) => res.json())
+                .then((data) => {
+                  setIsPremium(!!data.isPremium)
+                  setSignalsUsed(typeof data.signalsUsed === 'number' ? data.signalsUsed : 0)
+                })
+                .catch((e) => console.error('App: re-check status after payment close failed:', e.message))
+                .finally(() => setStatusLoading(false))
+            } else {
+              setStatusLoading(false)
+            }
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -148,6 +244,15 @@ const styles = {
     alignItems: 'center',
     gap: 8,
   },
+  loadingBadge: {
+    fontSize: 12,
+    fontWeight: 700,
+    background: C.panel,
+    border: `1px solid ${C.border}`,
+    borderRadius: 999,
+    padding: '4px 10px',
+    color: C.muted,
+  },
   trialBadge: {
     fontSize: 12,
     fontWeight: 700,
@@ -175,6 +280,13 @@ const styles = {
     fontSize: 16,
     color: C.text,
     cursor: 'pointer',
+  },
+  statusErrorBanner: {
+    marginTop: 10,
+    fontSize: 11,
+    color: C.red,
+    fontWeight: 600,
+    lineHeight: 1.5,
   },
   upgradeBanner: {
     marginTop: 10,
@@ -206,4 +318,4 @@ const styles = {
     textDecoration: 'none',
     fontWeight: 600,
   },
-    }
+                                                       }
