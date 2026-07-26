@@ -1,17 +1,38 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // 🔴 FIX: forex_users is where premium status lives. Read is fine (the
+    // frontend never actually reads this directly — /api/check-status does,
+    // via the Admin SDK, which always bypasses these rules regardless of
+    // what's written here — but keeping read:true doesn't leak anything
+    // sensitive since it's just a premiumUntil timestamp per userId).
+    // Write must stay false: only server.js (Admin SDK) may grant Premium.
     match /forex_users/{userId} {
       allow read: if true;
       allow write: if false;
     }
+
+    // Payments: the client creates a pending record, but can never read,
+    // edit, or delete it afterward — only the backend (Admin SDK, via the
+    // Telegram webhook approve/reject handler) can change `status`.
     match /forex_payments/{paymentId} {
       allow create: if true;
       allow read, update, delete: if false;
     }
+
+    // 🔴 THE FIX: forex_trials previously allowed `create, update: if true`
+    // from any client. That meant anyone could open their browser console
+    // and run:
+    //   setDoc(doc(db, 'forex_trials', myUserId), { signalsUsed: 0 })
+    // to reset their own free-trial counter indefinitely, completely
+    // bypassing the backend's /api/check-status increment logic. The
+    // backend (server.js, via the Admin SDK) always bypasses these rules
+    // anyway, so it doesn't need `create`/`update: if true` here at all —
+    // closing client write access breaks nothing legitimate.
     match /forex_trials/{userId} {
-      allow read, create, update: if true;
-      allow delete: if false;
+      allow read: if true;
+      allow create, update, delete: if false;
     }
   }
 }
