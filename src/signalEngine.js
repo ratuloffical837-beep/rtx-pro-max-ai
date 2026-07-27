@@ -98,23 +98,26 @@ export async function generateSignal({ modeId, market, timeframes }) {
 
   // Common rule #1: no signal without confluence.
   if (!timeframes['4h'] || !timeframes['1h']) {
-    console.log(`${debugTag} noSignal: missing 4h or 1h timeframe data (need ≥30 candles each)`)
-    return { noSignal: true }
+    const reason = 'HTF ডেটা মিসিং: 4h বা 1h টাইমফ্রেমে যথেষ্ট ক্যান্ডেল (৩০+) পাওয়া যায়নি — Twelve Data থেকে ডেটা আসেনি বা ৩০টার কম এসেছে।'
+    console.log(`${debugTag} noSignal:`, reason)
+    return { noSignal: true, debugReason: reason }
   }
 
   const raw = runner({ timeframes, htfBias4h, htfBias1h })
 
   // Common rule #3: below minimum confidence threshold → no forced signal.
   if (!raw || raw.noSignal) {
-    console.log(`${debugTag} noSignal: mode engine found no qualifying pattern on this pass`)
-    return { noSignal: true }
+    const reason = `"${modeMeta?.name || modeId}" মোডের প্যাটার্ন কন্ডিশন এই মুহূর্তে ১৫m ক্যান্ডেলে মেলেনি (অথবা HTF bias-এর সাথে দিক না মেলায় বাতিল হয়েছে)।`
+    console.log(`${debugTag} noSignal:`, reason)
+    return { noSignal: true, debugReason: reason }
   }
 
   // Common rule #4: NaN/Infinity guard.
   const rawNumbers = [raw.entry, raw.sl, raw.tp1, raw.tp2, raw.tp3]
   if (rawNumbers.some((n) => typeof n !== 'number' || !Number.isFinite(n))) {
-    console.log(`${debugTag} noSignal: raw mode output contained NaN/Infinity`, raw)
-    return { noSignal: true }
+    const reason = 'ক্যালকুলেশনে NaN/Infinity পাওয়া গেছে — raw মোড আউটপুট বাতিল করা হয়েছে।'
+    console.log(`${debugTag} noSignal:`, reason, raw)
+    return { noSignal: true, debugReason: reason }
   }
 
   // Pip conversion — the ONLY place this happens.
@@ -138,8 +141,9 @@ export async function generateSignal({ modeId, market, timeframes }) {
     // 🆕 This is the log line to check first whenever "no signal" shows up
     // repeatedly — it tells you exactly which gate failed and with what
     // numbers, instead of leaving it a mystery.
-    console.log(`${debugTag} noSignal: riskGate discarded —`, gate.reason, { slPips: slPips.toFixed(2), rr: rr.toFixed(3) })
-    return { noSignal: true }
+    const reason = `riskGate বাতিল করেছে: ${gate.reason} (SL দূরত্ব: ${slPips.toFixed(1)} pips, R:R: 1:${rr.toFixed(2)})`
+    console.log(`${debugTag} noSignal:`, reason)
+    return { noSignal: true, debugReason: reason }
   }
 
   let accountBalance = null
@@ -214,4 +218,4 @@ export async function generateSignal({ modeId, market, timeframes }) {
     detail: raw.detail || null,
     positionSizing,
   }
-        }
+  }
