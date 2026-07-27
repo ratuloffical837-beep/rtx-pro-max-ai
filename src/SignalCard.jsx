@@ -3,6 +3,15 @@
 // 🔴 No leverage-suggestion row in the TP/SL box — that context lives only in
 // the Position Sizing box below it.
 // 🔴 Disclaimer line at the bottom is mandatory and must never be removed.
+//
+// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
+// 🔴 Added an explicit "এন্ট্রি টাইমফ্রেম: 15m" badge. Every mode engine
+// (sweepReclaim.js, crtTbsEngine.js, wyckoffIctEngine.js, qmSmcEngine.js,
+// priceActionFibEngine.js) always analyzes the 15m candles to build entry/
+// SL/TP — 4h/1h are HTF bias confirmation only, 5m is an informational
+// reading only. Before this label existed, the chart above (which defaulted
+// to a 1h view) made it look like signals came from 1h, causing real
+// confusion about which timeframe to actually open the trade on.
 
 import React, { useState } from 'react'
 import { C } from './constants.js'
@@ -47,6 +56,10 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
       </div>
 
       <div style={styles.pairName}>{signal.pair?.name}</div>
+
+      {/* 🔴 FIX: explicit entry timeframe — removes ambiguity about which
+          chart timeframe this signal's levels were actually calculated from. */}
+      <div style={styles.timeframeBadge}>📊 এন্ট্রি টাইমফ্রেম: 15m</div>
 
       {/* TP/SL box */}
       <div style={styles.tpslBox}>
@@ -226,6 +239,16 @@ const styles = {
     fontWeight: 700,
   },
   pairName: { fontSize: 15, fontWeight: 800, color: C.text },
+  timeframeBadge: {
+    alignSelf: 'flex-start',
+    background: `${C.cyan}18`,
+    border: `1px solid ${C.cyan}55`,
+    color: C.cyan,
+    borderRadius: 8,
+    padding: '4px 10px',
+    fontSize: 11,
+    fontWeight: 700,
+  },
   tpslBox: {
     background: C.panel,
     border: `1px solid ${C.border}`,
