@@ -2,11 +2,29 @@
 // Quasimodo (QM) pattern: a failed higher-high/lower-low that breaks the
 // prior opposite swing, signaling exhaustion — confirmed with SMC Order
 // Block + FVG confluence.
+//
+// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
+// 🔴 Unlike the other 4 mode engines, this one was never as narrowly tied
+// to "the exact last candle" — the trigger condition (`lastClose >
+// neckline.price`) stays true for every candle after the neckline break,
+// as long as the swing structure (lowA/lowB/lowC or highA/highB/highC)
+// hasn't shifted. So this engine wasn't the main cause of the "always no
+// signal" bug. Two smaller but real issues fixed here instead:
+// 1. FVG detection only scanned the last 15 candles — widened to 20 for a
+//    better realistic hit rate on the confluence requirement, since gaps
+//    relevant to a recent QM break can sit slightly further back.
+// 2. Added the same NaN/SL-inversion safety guard the other 4 engines now
+//    have, for consistency and to guard against a degenerate SL if price
+//    has drifted a long way from the "head" level since the break.
 
 import { findSwings, calcATR, detectOrderBlock, detectFVG, isFiniteNumber } from './smartMoney.js'
 
 const LTF_KEY = '15m'
 const CONFIRM_KEY = '5m'
+
+// 🔴 Widened from 15 → 20 candles so FVGs relevant to a slightly older QM
+// break aren't missed purely due to an arbitrarily short lookback window.
+const FVG_LOOKBACK = 20
 
 export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
   const ltf = timeframes[LTF_KEY]
@@ -48,7 +66,7 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
   else return { noSignal: true }
 
   const orderBlock = detectOrderBlock(ltf, direction)
-  const fvgs = detectFVG(ltf.slice(-15))
+  const fvgs = detectFVG(ltf.slice(-FVG_LOOKBACK))
   const relevantFvg = fvgs.find((g) => (direction === 'LONG' ? g.type === 'bullish' : g.type === 'bearish'))
 
   // SMC confluence requirement — common rule #1, no signal without confluence.
@@ -74,6 +92,11 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
+  // 🔴 NEW: SL-inversion guard, consistent with the other 4 engines — if
+  // price has moved far enough from the head level, a naive SL could end
+  // up on the wrong side of entry.
+  if (direction === 'LONG' && sl >= entry) return { noSignal: true }
+  if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
