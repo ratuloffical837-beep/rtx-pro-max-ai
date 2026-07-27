@@ -245,14 +245,23 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
         </div>
       ) : (
         <>
-          {/* 3. Chart */}
+          {/* 3. Chart — 🔴 FIX: default interval was 60 (1h), which visually
+              suggested signals came from the 1h chart. Every mode engine
+              actually analyzes the 15m candles for entries (4h/1h are only
+              used for HTF bias confirmation, 5m only for an informational
+              confirmation reading) — the chart now defaults to matching
+              that 15m entry timeframe so what's shown matches what's
+              analyzed. The person can still switch timeframes with the
+              chart's own 1m/5m/15m/30m/1h buttons; that only changes the
+              visual chart, never the underlying signal calculation. */}
           <div style={styles.chartBox}>
+            <div style={styles.timeframeNote}>📊 এন্ট্রি টাইমফ্রেম: 15m (4h/1h = ট্রেন্ড কনফার্মেশন)</div>
             <iframe
               title="tradingview-chart"
               style={styles.chartFrame}
               src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(
                 selectedMarket.tv
-              )}&interval=60&theme=dark&style=1&hidesidetoolbar=1`}
+              )}&interval=15&theme=dark&style=1&hidesidetoolbar=1`}
             />
           </div>
 
@@ -409,12 +418,20 @@ const styles = {
   },
   chartBox: {
     width: '100%',
-    height: 260,
     borderRadius: 12,
     overflow: 'hidden',
     border: `1px solid ${C.border}`,
   },
-  chartFrame: { width: '100%', height: '100%', border: 'none' },
+  timeframeNote: {
+    background: C.panel,
+    color: C.cyan,
+    fontSize: 10.5,
+    fontWeight: 700,
+    textAlign: 'center',
+    padding: '6px 8px',
+    borderBottom: `1px solid ${C.border}`,
+  },
+  chartFrame: { width: '100%', height: 260, border: 'none', display: 'block' },
   pairInfoCard: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -560,4 +577,4 @@ const styles = {
     cursor: 'pointer',
     fontSize: 13,
   },
-}
+    }
