@@ -2,12 +2,29 @@
 // Wyckoff Spring (false breakdown below range support, i.e. accumulation
 // phase) or Upthrust (false breakout above range resistance, distribution
 // phase) combined with an ICT-style CHoCH/Order Block confirmation.
+//
+// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
+// 🔴 THE "ALWAYS NO SIGNAL" ROOT CAUSE: the Spring/Upthrust check only ever
+// looked at `ltf.slice(-3)` — meaning the spring/upthrust candle had to be
+// EXACTLY the second-to-last candle, with the very last candle as the
+// reclaim. A spring/upthrust that reclaimed 2-5 candles ago (still a
+// perfectly valid accumulation/distribution signal) was invisible here.
+//
+// This version scans a recent window for the most recent spring/upthrust
+// candle (not just the fixed second-to-last position), then re-validates
+// that price is still respecting the range as of the current candle (i.e.
+// hasn't broken back out, which would invalidate the setup) before
+// requiring CHoCH confirmation and entering at the current price.
 
 import { findSwings, calcATR, detectOrderBlock, detectBOSCHoCH, isFiniteNumber } from './smartMoney.js'
 
 const LTF_KEY = '15m'
 const CONFIRM_KEY = '5m'
 const RANGE_LOOKBACK = 20
+
+// 🔴 How many recent candles to scan for a still-valid spring/upthrust
+// trigger, instead of only the fixed second-to-last candle.
+const TRIGGER_WINDOW = 6
 
 export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
   const ltf = timeframes[LTF_KEY]
@@ -24,40 +41,68 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
   const rangeHigh = Math.max(...window.map((c) => c.high))
   const rangeLow = Math.min(...window.map((c) => c.low))
 
-  const recent = ltf.slice(-3)
-  const [prev2, prev1, last] = recent
+  const last = ltf[ltf.length - 1]
 
-  // Spring: wick dips below range low, close reclaims back inside — the
-  // Wyckoff "shakeout" before markup.
-  const isSpring = prev1.low < rangeLow && Math.min(prev1.open, prev1.close) > rangeLow && last.close > rangeLow
+  // 🔴 Scan backward through the recent window for the most recent
+  // spring/upthrust candle — a candle that wicked outside the range but
+  // closed its body back inside.
+  let triggerDirection = null
 
-  // Upthrust: wick pokes above range high, close falls back inside — the
-  // Wyckoff distribution signal before markdown.
-  const isUpthrust = prev1.high > rangeHigh && Math.max(prev1.open, prev1.close) < rangeHigh && last.close < rangeHigh
+  const scanStart = ltf.length - 2 // start one before the current candle
+  const scanEnd = Math.max(1, ltf.length - TRIGGER_WINDOW)
 
+  for (let i = scanStart; i >= scanEnd; i--) {
+    const c = ltf[i]
+    const isSpringCandle = c.low < rangeLow && Math.min(c.open, c.close) > rangeLow
+    const isUpthrustCandle = c.high > rangeHigh && Math.max(c.open, c.close) < rangeHigh
+
+    if (isSpringCandle) {
+      triggerDirection = 'LONG'
+      break
+    }
+    if (isUpthrustCandle) {
+      triggerDirection = 'SHORT'
+      break
+    }
+  }
+
+  if (!triggerDirection) return { noSignal: true }
+
+  // 🔴 Invalidation check: price must still be inside the range as of the
+  // current candle — a spring/upthrust that has since been fully broken
+  // back through no longer represents a valid accumulation/distribution setup.
+  const stillValid = triggerDirection === 'LONG' ? last.close > rangeLow : last.close < rangeHigh
+  if (!stillValid) return { noSignal: true }
+
+  // CHoCH confirmation is evaluated on current structure — this is
+  // intentionally a "live" check, not windowed, since it reflects whether
+  // the broader structural shift is still in effect right now.
   const choch = detectBOSCHoCH(ltf)
 
   const htfAgreesBullish = htfBias4h !== 'Bearish' && htfBias1h !== 'Bearish'
   const htfAgreesBearish = htfBias4h !== 'Bullish' && htfBias1h !== 'Bullish'
 
   let direction = null
-  if (isSpring && htfAgreesBullish && choch?.direction === 'bullish') direction = 'LONG'
-  else if (isUpthrust && htfAgreesBearish && choch?.direction === 'bearish') direction = 'SHORT'
+  if (triggerDirection === 'LONG' && htfAgreesBullish && choch?.direction === 'bullish') direction = 'LONG'
+  else if (triggerDirection === 'SHORT' && htfAgreesBearish && choch?.direction === 'bearish') direction = 'SHORT'
   else return { noSignal: true }
 
   const orderBlock = detectOrderBlock(ltf, direction)
   const entry = last.close
   const buffer = atr * 0.3
 
+  // SL anchors to the range boundary itself (a stable structural level)
+  // rather than a specific historical candle's wick, since the trigger
+  // candle may now be several bars back.
   let sl, tp1, tp2, tp3
   if (direction === 'LONG') {
-    sl = (orderBlock ? orderBlock.low : prev1.low) - buffer
+    sl = (orderBlock ? Math.min(orderBlock.low, rangeLow) : rangeLow) - buffer
     const risk = entry - sl
     tp1 = entry + risk * 1.5
     tp2 = rangeHigh
     tp3 = entry + risk * 3
   } else {
-    sl = (orderBlock ? orderBlock.high : prev1.high) + buffer
+    sl = (orderBlock ? Math.max(orderBlock.high, rangeHigh) : rangeHigh) + buffer
     const risk = sl - entry
     tp1 = entry - risk * 1.5
     tp2 = rangeLow
@@ -65,6 +110,8 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
+  if (direction === 'LONG' && sl >= entry) return { noSignal: true }
+  if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
@@ -94,7 +141,7 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
     ],
     detail:
       direction === 'LONG'
-        ? 'দাম একটি accumulation range-এর নিচে একটি Spring (false breakdown) তৈরি করেছে, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bullish Change of Character (CHoCH) কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markup phase শুরুর সাধারণ ইঙ্গিত।'
-        : 'দাম একটি distribution range-এর ওপরে একটি Upthrust (false breakout) তৈরি করেছে, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bearish Change of Character (CHoCH) কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markdown phase শুরুর সাধারণ ইঙ্গিত।',
+        ? 'দাম একটি accumulation range-এর নিচে একটি Spring (false breakdown) তৈরি করেছিল (সাম্প্রতিক কয়েকটি ক্যান্ডেলের মধ্যে), তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bullish Change of Character (CHoCH) কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markup phase শুরুর সাধারণ ইঙ্গিত।'
+        : 'দাম একটি distribution range-এর ওপরে একটি Upthrust (false breakout) তৈরি করেছিল (সাম্প্রতিক কয়েকটি ক্যান্ডেলের মধ্যে), তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bearish Change of Character (CHoCH) কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markdown phase শুরুর সাধারণ ইঙ্গিত।',
   }
-}
+    }
