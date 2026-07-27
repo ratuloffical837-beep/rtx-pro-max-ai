@@ -29,6 +29,7 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
   const [loading, setLoading] = useState(false)
   const [progressStep, setProgressStep] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [debugReason, setDebugReason] = useState(null)
   const [drawdownAlertOn, setDrawdownAlertOn] = useState(true)
   const [lossCountToday, setLossCountToday] = useState(0)
 
@@ -92,6 +93,7 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
     setSelectedPairName(name)
     setSignal(null)
     setErrorMsg('')
+    setDebugReason(null)
     try {
       localStorage.setItem('rtx_forex_pair', name)
     } catch (e) {
@@ -141,6 +143,7 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
 
   async function handleGenerate() {
     setErrorMsg('')
+    setDebugReason(null)
     setSignal(null)
 
     if (!isPremium && signalsRemaining <= 0) {
@@ -170,10 +173,13 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
 
       if (!result || result.noSignal) {
         setErrorMsg('❌ এই পেয়ারে এখন কোনো শক্তিশালী সিগন্যাল নেই।')
+        setDebugReason(result?.debugReason || null)
         setLoading(false)
         setProgressStep('')
         return
       }
+
+      setDebugReason(null)
 
       setSignal(result)
 
@@ -298,6 +304,10 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
 
           {/* 7. Error/no-signal */}
           {errorMsg && <div style={styles.errorBox}>{errorMsg}</div>}
+          {/* 🆕 DEBUG: shows signalEngine.js's exact reason for "no signal" —
+              temporary diagnostic aid, safe to remove once the root cause
+              of persistent no-signal reports is confirmed and fixed. */}
+          {debugReason && <div style={styles.debugBox}>🔍 DEBUG: {debugReason}</div>}
 
           {/* 8. SignalCard */}
           {signal && (
@@ -474,6 +484,16 @@ const styles = {
     fontSize: 12,
     color: C.red,
     fontWeight: 600,
+    textAlign: 'center',
+  },
+  debugBox: {
+    background: '#0d1117',
+    border: `1px dashed ${C.blue}66`,
+    borderRadius: 10,
+    padding: 10,
+    fontSize: 11,
+    color: C.blue,
+    lineHeight: 1.6,
     textAlign: 'center',
   },
   changeMarketBtn: {
