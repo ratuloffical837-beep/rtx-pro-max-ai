@@ -3,22 +3,23 @@
 // it's wrong — it belongs in the frontend (twelveDataClient.js / signalEngine.js).
 //
 // ── FIXES IN THIS VERSION ───────────────────────────────────────────────
-// 1. 🔴 Telegram webhook is now REGISTERED automatically on boot via
-//    `setWebhook`. Before, nothing ever told Telegram where to send
-//    /approve_xxx and /reject_xxx admin messages, so the bot never called
-//    our /webhook/:secret route at all — the admin's commands went nowhere.
-// 2. 🔴 notify-payment now actually checks Telegram's API response. Before,
-//    a bad BOT_TOKEN / ADMIN_TELEGRAM_ID / admin never having pressed
-//    "Start" on the bot would fail silently and nobody would know why no
-//    notification arrived.
-// 3. 🔴 Premium status is now saved to forex_users/{userId} — the same
-//    Telegram userId the frontend uses in /api/check-status. Before, this
-//    was saved under forex_users/{phone}, which never matched the id
-//    check-status queried by, so approved users never actually became
-//    Premium in the app.
-// 4. /api/notify-payment and the webhook now require/pass `userId` end to
-//    end: PaymentPage.jsx -> Firestore forex_payments doc -> Telegram admin
-//    message -> /approve_xxx handler -> forex_users/{userId}.
+// 1. Telegram webhook is registered automatically on boot via `setWebhook`.
+// 2. notify-payment verifies Telegram's API response instead of failing silently.
+// 3. Premium is saved to forex_users/{userId} (the Telegram user id), matching
+//    what /api/check-status looks up — not forex_users/{phone}.
+// 4. Self-ping every 5 minutes (was 10) to stay safely inside Render free
+//    tier's ~15 minute idle-sleep window.
+// 5. 🔴 NEW: the admin notification now sends REAL Telegram inline buttons
+//    (✅ Approve / ❌ Reject) via `reply_markup.inline_keyboard`, instead of
+//    plain `/approve_xxx` text. Telegram auto-linkifies bare slash-commands
+//    in a message, which is why it looked like "just a link" before — that
+//    was never a tappable button, just Telegram's command-link styling.
+//    Tapping an inline button now fires a `callback_query` update, handled
+//    below, which approves/rejects immediately, answers the callback (so
+//    the button's loading spinner clears), and edits the original message
+//    to show the final "✅ Approved" / "❌ Rejected" state so it can't be
+//    tapped twice. The old `/approve_xxx` / `/reject_xxx` text-command path
+//    is kept as a fallback in case an admin ever types a command manually.
 
 const express = require('express')
 const cors = require('cors')
@@ -50,6 +51,31 @@ const BOT_TOKEN = process.env.BOT_TOKEN
 const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET
 const SELF_URL = process.env.RENDER_EXTERNAL_URL
+const TELEGRAM_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null
+
+// Small shared helper — every Telegram Bot API call goes through this so
+// error-checking (HTTP status AND Telegram's own {ok:false} payloads) is
+// consistent everywhere instead of repeated ad hoc per call site.
+async function telegramApi(method, body) {
+  if (!TELEGRAM_API) {
+    return { ok: false, description: 'BOT_TOKEN not configured' }
+  }
+  try {
+    const res = await fetch(`${TELEGRAM_API}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) {
+      console.error(`Telegram ${method} rejected:`, data.description || data)
+    }
+    return data
+  } catch (e) {
+    console.error(`Telegram ${method} request failed:`, e.message)
+    return { ok: false, description: e.message }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // GET /health
@@ -66,9 +92,6 @@ app.get('/health', (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/check-status
 // Body: { userId }
-// Returns whether the user is Premium and how many free (lifetime) signals
-// they have left. The backend is only the source of truth for the counter —
-// it never sees the actual signal content or market data.
 // ---------------------------------------------------------------------------
 app.post('/api/check-status', async (req, res) => {
   try {
@@ -86,14 +109,10 @@ app.post('/api/check-status', async (req, res) => {
       await trialRef.set({ signalsUsed: 0, createdAt: admin.firestore.FieldValue.serverTimestamp() })
     }
 
-    // 🔴 Premium is now looked up by the SAME userId the frontend sends —
-    // this is the id that /webhook/:secret writes to after admin approval.
     const userRef = db.collection('forex_users').doc(userId)
     const userSnap = await userRef.get()
     const isPremium = userSnap.exists && userSnap.data().premiumUntil && userSnap.data().premiumUntil.toDate() > new Date()
 
-    // If this call is also being used to record a just-generated free
-    // signal, increment here. Callers pass `consume: true` for that case.
     if (req.body.consume && !isPremium) {
       await trialRef.update({ signalsUsed: admin.firestore.FieldValue.increment(1) })
       signalsUsed += 1
@@ -113,11 +132,8 @@ app.post('/api/check-status', async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/notify-payment
 // Body: { paymentId, userId, phone, trxId }
-// Pings the admin on Telegram so they can approve/reject the payment that
-// the frontend already wrote to forex_payments/{paymentId} in Firestore.
-//
-// 🔴 This now VERIFIES Telegram actually accepted the message and returns a
-// clear ok/warning to the caller instead of silently swallowing failures.
+// 🔴 Now sends real inline Approve/Reject buttons instead of plain text
+// commands, and verifies Telegram actually accepted the message.
 // ---------------------------------------------------------------------------
 app.post('/api/notify-payment', async (req, res) => {
   const { paymentId, userId, phone, trxId } = req.body || {}
@@ -138,41 +154,84 @@ app.post('/api/notify-payment', async (req, res) => {
     `Telegram User ID: ${userId || 'N/A'}\n` +
     `Phone: ${phone || 'N/A'}\n` +
     `TrxID: ${trxId || 'N/A'}\n\n` +
-    `অনুমোদন করতে /approve_${paymentId} অথবা প্রত্যাখ্যান করতে /reject_${paymentId} পাঠান।`
+    `নিচের বাটনে ট্যাপ করে অনুমোদন বা প্রত্যাখ্যান করুন।`
 
-  try {
-    const tgRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_TELEGRAM_ID, text }),
-    })
-    const tgData = await tgRes.json()
-
-    // 🔴 Telegram's sendMessage can return HTTP 200 with { ok: false } (e.g.
-    // "chat not found" if the admin never pressed Start on the bot, or a bad
-    // ADMIN_TELEGRAM_ID) — checking tgRes.ok alone would miss this.
-    if (!tgRes.ok || !tgData.ok) {
-      console.error('Telegram sendMessage rejected:', tgData.description || tgData)
-      return res.json({
-        ok: false,
-        warning: `Payment record was saved, but Telegram did not deliver the admin notification (${
-          tgData.description || 'unknown reason'
-        }). Make sure ADMIN_TELEGRAM_ID is correct and the admin has pressed "Start" on the bot at least once.`,
-      })
-    }
-
-    return res.json({ ok: true })
-  } catch (e) {
-    console.error('POST /api/notify-payment failed:', e.message)
-    // Don't fail the request hard — the payment record already exists in
-    // Firestore even if this notification ping fails.
-    return res.json({ ok: false, warning: 'Notification request failed, but payment record was saved.' })
+  // 🔴 Real inline keyboard — callback_data carries the paymentId so the
+  // callback_query handler below knows exactly which record to act on.
+  // Telegram callback_data has a 64-byte limit; Firestore auto-ids (~20
+  // chars) comfortably fit inside "approve_"/"reject_" + id.
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        { text: '✅ Approve', callback_data: `approve_${paymentId}` },
+        { text: '❌ Reject', callback_data: `reject_${paymentId}` },
+      ],
+    ],
   }
+
+  const tgData = await telegramApi('sendMessage', {
+    chat_id: ADMIN_TELEGRAM_ID,
+    text,
+    reply_markup: replyMarkup,
+  })
+
+  if (!tgData.ok) {
+    return res.json({
+      ok: false,
+      warning: `Payment record was saved, but Telegram did not deliver the admin notification (${
+        tgData.description || 'unknown reason'
+      }). Make sure ADMIN_TELEGRAM_ID is correct and the admin has pressed "Start" on the bot at least once.`,
+    })
+  }
+
+  return res.json({ ok: true })
 })
 
 // ---------------------------------------------------------------------------
+// Shared approve/reject logic — used by BOTH the inline-button callback
+// handler and the legacy /approve_xxx text-command fallback, so the two
+// paths can never drift out of sync with each other.
+// ---------------------------------------------------------------------------
+async function approvePayment(paymentId) {
+  if (!db) return { ok: false, message: 'Database unavailable' }
+
+  const paymentRef = db.collection('forex_payments').doc(paymentId)
+  const paymentSnap = await paymentRef.get()
+
+  if (!paymentSnap.exists) {
+    return { ok: false, message: `Payment ${paymentId} not found` }
+  }
+
+  const payment = paymentSnap.data()
+  await paymentRef.update({ status: 'approved' })
+
+  if (!payment.userId) {
+    console.error(
+      `Payment ${paymentId} has no userId field — cannot grant Premium. This payment predates the userId fix or PaymentPage failed to attach it.`
+    )
+    return { ok: false, message: 'Payment approved but has no userId — Premium NOT granted. Check Firestore manually.' }
+  }
+
+  // 🔴 THE CORE FIX: keyed by Telegram userId — the same id
+  // /api/check-status looks up — not phone.
+  const premiumUntil = new Date()
+  premiumUntil.setDate(premiumUntil.getDate() + 30)
+  await db.collection('forex_users').doc(payment.userId).set({ premiumUntil }, { merge: true })
+
+  return { ok: true, message: `Premium granted to user ${payment.userId} until ${premiumUntil.toDateString()}` }
+}
+
+async function rejectPayment(paymentId) {
+  if (!db) return { ok: false, message: 'Database unavailable' }
+  await db.collection('forex_payments').doc(paymentId).update({ status: 'rejected' })
+  return { ok: true, message: `Payment ${paymentId} rejected` }
+}
+
+// ---------------------------------------------------------------------------
 // POST /webhook/:secret
-// Telegram bot webhook — handles /approve_xxx and /reject_xxx admin commands.
+// Telegram bot webhook — handles BOTH:
+//   (a) callback_query from the inline Approve/Reject buttons (primary path)
+//   (b) /approve_xxx and /reject_xxx typed text commands (fallback path)
 // ---------------------------------------------------------------------------
 app.post('/webhook/:secret', async (req, res) => {
   try {
@@ -181,6 +240,54 @@ app.post('/webhook/:secret', async (req, res) => {
     }
     if (!db) return res.status(503).json({ error: 'Database unavailable' })
 
+    // ── Path (a): inline button tap ──────────────────────────────────
+    const callbackQuery = req.body?.callback_query
+    if (callbackQuery) {
+      const data = callbackQuery.data || ''
+      const chatId = callbackQuery.message?.chat?.id
+      const messageId = callbackQuery.message?.message_id
+      const originalText = callbackQuery.message?.text || ''
+
+      const approveMatch = data.match(/^approve_(.+)/)
+      const rejectMatch = data.match(/^reject_(.+)/)
+
+      let resultText = null
+      let toastText = ''
+
+      if (approveMatch) {
+        const result = await approvePayment(approveMatch[1])
+        resultText = result.ok ? `✅ অনুমোদিত হয়েছে\n\n${originalText}` : `⚠️ ${result.message}\n\n${originalText}`
+        toastText = result.ok ? '✅ Approved & Premium granted' : `⚠️ ${result.message}`
+      } else if (rejectMatch) {
+        const result = await rejectPayment(rejectMatch[1])
+        resultText = result.ok ? `❌ প্রত্যাখ্যাত হয়েছে\n\n${originalText}` : `⚠️ ${result.message}\n\n${originalText}`
+        toastText = result.ok ? '❌ Rejected' : `⚠️ ${result.message}`
+      }
+
+      // 🔴 answerCallbackQuery is mandatory — without it, Telegram leaves the
+      // button's tap-spinner stuck indefinitely on the admin's screen.
+      await telegramApi('answerCallbackQuery', {
+        callback_query_id: callbackQuery.id,
+        text: toastText.slice(0, 200), // Telegram caps toast text length
+        show_alert: false,
+      })
+
+      // Edit the original message to show the final state and REMOVE the
+      // buttons (empty inline_keyboard) so it can't be approved/rejected
+      // twice by accident.
+      if (chatId && messageId && resultText) {
+        await telegramApi('editMessageText', {
+          chat_id: chatId,
+          message_id: messageId,
+          text: resultText,
+          reply_markup: { inline_keyboard: [] },
+        })
+      }
+
+      return res.json({ ok: true })
+    }
+
+    // ── Path (b): legacy typed /approve_xxx or /reject_xxx text command ──
     const message = req.body?.message
     const text = message?.text || ''
 
@@ -188,31 +295,9 @@ app.post('/webhook/:secret', async (req, res) => {
     const rejectMatch = text.match(/^\/reject_(.+)/)
 
     if (approveMatch) {
-      const paymentId = approveMatch[1]
-      const paymentRef = db.collection('forex_payments').doc(paymentId)
-      const paymentSnap = await paymentRef.get()
-
-      if (paymentSnap.exists) {
-        const payment = paymentSnap.data()
-        await paymentRef.update({ status: 'approved' })
-
-        // 🔴 THE CORE FIX: premium is now keyed by the Telegram userId that
-        // PaymentPage.jsx saved onto the payment doc — the exact same id
-        // /api/check-status looks up. Previously this used `payment.phone`,
-        // which never matched, so approval never actually unlocked Premium.
-        if (payment.userId) {
-          const premiumUntil = new Date()
-          premiumUntil.setDate(premiumUntil.getDate() + 30)
-          await db.collection('forex_users').doc(payment.userId).set({ premiumUntil }, { merge: true })
-        } else {
-          console.error(
-            `Payment ${paymentId} has no userId field — cannot grant Premium. This payment predates the userId fix or PaymentPage failed to attach it.`
-          )
-        }
-      }
+      await approvePayment(approveMatch[1])
     } else if (rejectMatch) {
-      const paymentId = rejectMatch[1]
-      await db.collection('forex_payments').doc(paymentId).update({ status: 'rejected' })
+      await rejectPayment(rejectMatch[1])
     }
 
     res.json({ ok: true })
@@ -223,38 +308,24 @@ app.post('/webhook/:secret', async (req, res) => {
 })
 
 // ---------------------------------------------------------------------------
-// 🔴 Auto-register the Telegram webhook on boot.
-// Before this fix, nothing ever called Telegram's `setWebhook` API, so
-// Telegram had no idea our /webhook/:secret route existed — admin commands
-// like /approve_xxx were just normal messages that went nowhere.
+// Auto-register the Telegram webhook on boot.
 // ---------------------------------------------------------------------------
 async function registerTelegramWebhook() {
   if (!BOT_TOKEN || !WEBHOOK_SECRET || !SELF_URL) {
     console.error(
       '⚠️ Skipping Telegram webhook registration — BOT_TOKEN, WEBHOOK_SECRET, or RENDER_EXTERNAL_URL is missing. ' +
-        'Admin /approve_xxx and /reject_xxx commands will NOT work until all three are set.'
+        'Admin approve/reject buttons will NOT work until all three are set.'
     )
     return
   }
 
   const webhookUrl = `${SELF_URL.replace(/\/$/, '')}/webhook/${WEBHOOK_SECRET}`
+  const data = await telegramApi('setWebhook', { url: webhookUrl })
 
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: webhookUrl }),
-    })
-    const data = await res.json()
-
-    if (!res.ok || !data.ok) {
-      console.error('🔥 Telegram setWebhook FAILED:', data.description || data)
-      return
-    }
-
+  if (data.ok) {
     console.log(`✅ Telegram webhook registered: ${webhookUrl}`)
-  } catch (e) {
-    console.error('🔥 Telegram setWebhook request failed:', e.message)
+  } else {
+    console.error('🔥 Telegram setWebhook FAILED:', data.description || data)
   }
 }
 
@@ -275,27 +346,22 @@ setInterval(async () => {
 }, 60 * 60 * 1000)
 
 // ---------------------------------------------------------------------------
-// Self-ping — keeps free-tier hosting awake.
-// 🔴 Render's free tier spins a web service down after ~15 minutes of no
-// inbound traffic. Pinging every 10 minutes left too thin a margin (a slow
-// or delayed tick could let the service fall asleep before the next ping).
-// Every 5 minutes keeps comfortably inside that window.
+// Self-ping — keeps free-tier hosting awake. Every 5 minutes, safely inside
+// Render free tier's ~15 minute idle-sleep window.
 // ---------------------------------------------------------------------------
-const SELF_PING_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+const SELF_PING_INTERVAL_MS = 5 * 60 * 1000
 
 if (SELF_URL) {
   setInterval(() => {
     fetch(`${SELF_URL}/health`)
       .then((res) => {
-        if (!res.ok) {
-          console.error(`Self-ping got non-OK status: ${res.status}`)
-        }
+        if (!res.ok) console.error(`Self-ping got non-OK status: ${res.status}`)
       })
       .catch((e) => console.error('Self-ping failed:', e.message))
   }, SELF_PING_INTERVAL_MS)
 } else {
   console.error(
-    '⚠️ RENDER_EXTERNAL_URL not set — self-ping is disabled, so this service may spin down after ~15 minutes of inactivity on Render\'s free tier.'
+    '⚠️ RENDER_EXTERNAL_URL not set — self-ping is disabled; this service may spin down after ~15 minutes of inactivity on Render\'s free tier.'
   )
 }
 
