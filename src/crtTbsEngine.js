@@ -1,9 +1,10 @@
 // crtTbsEngine.js — Mode 2: CRT + TBS PRO
-// ✅ FIXES:
-// 1. buffer: atr*0.3 → atr*0.5
-// 2. HTF logic: 4h primary only
-// 3. TBS condition relaxed: b3.close > b2.high → b3.close > body of b2
-// 4. SL inversion guard confirmed present
+// ✅ FINAL VERSION:
+// - TP order enforced
+// - TP2 fallback to midpoint if range extreme invalid
+// - Relaxed TBS condition (body reclaim, not full wick)
+// - buffer atr*0.5
+// - HTF 4h primary only
 
 import { calcATR, isFiniteNumber } from './smartMoney.js'
 
@@ -34,7 +35,6 @@ export function runCrtTbs({ timeframes, htfBias4h, htfBias1h }) {
   const afterRange = ltf.slice(rangeCandleIdx + 1)
   if (afterRange.length < 3) return { noSignal: true }
 
-  // ✅ FIX: 4h is primary — 1h conflict no longer blocks signal
   const htfAgreesBullish = htfBias4h !== 'Bearish'
   const htfAgreesBearish = htfBias4h !== 'Bullish'
 
@@ -50,8 +50,6 @@ export function runCrtTbs({ timeframes, htfBias4h, htfBias1h }) {
     const b2 = afterRange[j - 1]
     const b3 = afterRange[j]
 
-    // ✅ FIX: relaxed condition — b3 only needs to reclaim b2's body,
-    //         not exceed b2's full wick (which was too strict before)
     const b2BullishBody = Math.max(b2.open, b2.close)
     const b2BearishBody = Math.min(b2.open, b2.close)
 
@@ -91,7 +89,6 @@ export function runCrtTbs({ timeframes, htfBias4h, htfBias1h }) {
   if (!stillValid) return { noSignal: true }
 
   const entry = lastCandle.close
-  // ✅ FIX: buffer increased from 0.3 to 0.5
   const buffer = atr * 0.5
 
   let sl, tp1, tp2, tp3
@@ -99,20 +96,35 @@ export function runCrtTbs({ timeframes, htfBias4h, htfBias1h }) {
   if (direction === 'LONG') {
     sl = triggerB2.low - buffer
     const risk = entry - sl
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry + risk * 1.5
-    tp2 = rangeCandle.high
     tp3 = entry + risk * 3
+    tp2 = rangeCandle.high > tp1 && rangeCandle.high < tp3
+      ? rangeCandle.high
+      : entry + risk * 2.25
   } else {
     sl = triggerB2.high + buffer
     const risk = sl - entry
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry - risk * 1.5
-    tp2 = rangeCandle.low
     tp3 = entry - risk * 3
+    tp2 = rangeCandle.low < tp1 && rangeCandle.low > tp3
+      ? rangeCandle.low
+      : entry - risk * 2.25
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
   if (direction === 'LONG' && sl >= entry) return { noSignal: true }
   if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
+
+  if (direction === 'LONG' && !(tp1 < tp2 && tp2 < tp3 && tp1 > entry)) {
+    return { noSignal: true }
+  }
+  if (direction === 'SHORT' && !(tp1 > tp2 && tp2 > tp3 && tp1 < entry)) {
+    return { noSignal: true }
+  }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
