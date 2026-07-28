@@ -1,9 +1,10 @@
 // qmSmcEngine.js — Mode 4: QM + SMC
-// ✅ FIXES:
-// 1. neckline null crash fixed in quickStats with optional chaining
-// 2. buffer: atr*0.3 → atr*0.5
-// 3. HTF logic: 4h primary only
-// 4. SL inversion guard confirmed present
+// ✅ FINAL VERSION:
+// - TP order enforced
+// - TP2 fallback if swing extreme invalid
+// - neckline null-safe
+// - buffer atr*0.5
+// - HTF 4h primary only
 
 import {
   findSwings,
@@ -55,7 +56,6 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     necklineBear !== null &&
     lastClose < necklineBear.price
 
-  // ✅ FIX: 4h is primary — 1h conflict no longer blocks signal
   const htfAgreesBullish = htfBias4h !== 'Bearish'
   const htfAgreesBearish = htfBias4h !== 'Bullish'
 
@@ -73,7 +73,6 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
   if (!orderBlock && !relevantFvg) return { noSignal: true }
 
   const entry = lastClose
-  // ✅ FIX: buffer increased from 0.3 to 0.5
   const buffer = atr * 0.5
   const headLevel = direction === 'LONG' ? lowB.price : highB.price
 
@@ -81,20 +80,37 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
   if (direction === 'LONG') {
     sl = headLevel - buffer
     const risk = entry - sl
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry + risk * 1.5
-    tp2 = swingHighs[swingHighs.length - 1].price
     tp3 = entry + risk * 3
+    const swingTarget = swingHighs[swingHighs.length - 1].price
+    tp2 = swingTarget > tp1 && swingTarget < tp3
+      ? swingTarget
+      : entry + risk * 2.25
   } else {
     sl = headLevel + buffer
     const risk = sl - entry
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry - risk * 1.5
-    tp2 = swingLows[swingLows.length - 1].price
     tp3 = entry - risk * 3
+    const swingTarget = swingLows[swingLows.length - 1].price
+    tp2 = swingTarget < tp1 && swingTarget > tp3
+      ? swingTarget
+      : entry - risk * 2.25
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
   if (direction === 'LONG' && sl >= entry) return { noSignal: true }
   if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
+
+  if (direction === 'LONG' && !(tp1 < tp2 && tp2 < tp3 && tp1 > entry)) {
+    return { noSignal: true }
+  }
+  if (direction === 'SHORT' && !(tp1 > tp2 && tp2 > tp3 && tp1 < entry)) {
+    return { noSignal: true }
+  }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
@@ -102,7 +118,6 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     bias5m = c.close > c.open ? 'Bullish' : c.close < c.open ? 'Bearish' : 'Neutral'
   }
 
-  // ✅ FIX: null-safe access for neckline in quickStats
   const necklineDisplay =
     direction === 'LONG'
       ? neckline?.price?.toFixed(5) ?? 'N/A'
@@ -139,4 +154,4 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
         ? 'দাম একটি lower-low (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing high (neckline) ভেঙে বাইরে চলে এসেছে — SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে।'
         : 'দাম একটি higher-high (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing low (neckline) ভেঙে নিচে চলে এসেছে — SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে।',
   }
-    }
+                    }
