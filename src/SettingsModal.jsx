@@ -1,10 +1,14 @@
-// SettingsModal.jsx — same bottom-sheet pattern as the original app, with the
-// 🆕 API key section and Credit Usage Meter added above the mode cards.
+// SettingsModal.jsx — bottom-sheet settings
+// ✅ FINAL VERSION:
+// - API key format validation (length check)
+// - Rules page accessible via button
+// - MoneyManagement + Rules integrated
 
 import React, { useEffect, useState } from 'react'
 import { C, SIGNAL_MODES, TWELVE_DATA_DAILY_CREDIT_LIMIT } from './constants.js'
 import { getApiKey, saveApiKey, getCreditUsageToday } from './twelveDataClient.js'
 import MoneyManagementModal from './MoneyManagementModal.jsx'
+import RulesPage from './RulesPage.jsx'
 
 export default function SettingsModal({ selectedModeId, onSelectMode, onClose }) {
   const [keyInput, setKeyInput] = useState('')
@@ -12,6 +16,7 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
   const [hasKey, setHasKey] = useState(false)
   const [creditUsed, setCreditUsed] = useState(0)
   const [moneyModalOpen, setMoneyModalOpen] = useState(false)
+  const [rulesOpen, setRulesOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -22,7 +27,7 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
       }
       setCreditUsed(getCreditUsageToday())
     } catch (e) {
-      console.error('SettingsModal: failed to read API key / credit usage:', e.message)
+      console.error('SettingsModal: read failed:', e.message)
     }
   }, [])
 
@@ -32,11 +37,21 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
       alert('⚠️ একটি বৈধ API Key লিখুন')
       return
     }
+    // ✅ Basic format validation — Twelve Data keys are ~32 alphanumeric chars
+    if (trimmed.length < 20 || trimmed.length > 64) {
+      alert('⚠️ API Key-র দৈর্ঘ্য সঠিক নয় — Twelve Data থেকে সঠিক Key কপি করুন')
+      return
+    }
+    if (!/^[a-zA-Z0-9]+$/.test(trimmed)) {
+      alert('⚠️ API Key-তে শুধু অক্ষর ও সংখ্যা থাকবে — অনুগ্রহ করে চেক করুন')
+      return
+    }
     try {
       saveApiKey(trimmed)
       setHasKey(true)
+      alert('✅ API Key সংরক্ষিত হয়েছে')
     } catch (e) {
-      console.error('SettingsModal: failed to save API key:', e.message)
+      console.error('SettingsModal: save failed:', e.message)
       alert('⚠️ Key সংরক্ষণ করা যায়নি — আবার চেষ্টা করুন')
     }
   }
@@ -49,7 +64,6 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
       <div style={styles.sheet} onClick={(e) => e.stopPropagation()}>
         <div style={styles.handle} />
 
-        {/* 1. API Key section */}
         <div style={styles.sectionTitle}>🔑 আপনার Twelve Data API Key</div>
         <div style={styles.keyRow}>
           <input
@@ -59,7 +73,11 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
             placeholder="আপনার API Key পেস্ট করুন"
             style={styles.keyInput}
           />
-          <button style={styles.eyeBtn} onClick={() => setShowKey((v) => !v)} aria-label="Toggle visibility">
+          <button
+            style={styles.eyeBtn}
+            onClick={() => setShowKey((v) => !v)}
+            aria-label="Toggle visibility"
+          >
             {showKey ? '🙈' : '👁'}
           </button>
         </div>
@@ -67,22 +85,22 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
           ✅ Save Key
         </button>
         <div style={styles.helperText}>
-          ⚠️ প্রতিদিন ৮০০ কল লিমিট — এই Key শুধু আপনার ব্রাউজারে সংরক্ষিত থাকে, আমাদের সার্ভারে যায়
-          না।
+          ⚠️ প্রতিদিন ৮০০ credit লিমিট (প্রায় ১৩০-১৬০টি সিগন্যাল) — এই Key শুধু আপনার ব্রাউজারে
+          সংরক্ষিত থাকে।
         </div>
         {!hasKey && (
           <div style={styles.warnText}>⚠️ প্রথমে এখানে আপনার API Key যোগ করুন।</div>
         )}
 
-        {/* 2. Credit usage meter */}
         <div style={styles.meterLabel}>
           আজকে ব্যবহৃত: {creditUsed} / {TWELVE_DATA_DAILY_CREDIT_LIMIT} credit
         </div>
         <div style={styles.meterTrack}>
-          <div style={{ ...styles.meterFill, width: `${creditPct}%`, background: creditColor }} />
+          <div
+            style={{ ...styles.meterFill, width: `${creditPct}%`, background: creditColor }}
+          />
         </div>
 
-        {/* 3. Mode cards */}
         <div style={styles.sectionTitle}>📊 সিগন্যাল মোড</div>
         <div style={styles.modeList}>
           {SIGNAL_MODES.map((mode) => {
@@ -105,18 +123,21 @@ export default function SettingsModal({ selectedModeId, onSelectMode, onClose })
           })}
         </div>
 
-        {/* 4. Money management */}
         <button style={styles.moneyBtn} onClick={() => setMoneyModalOpen(true)}>
           💰 Money Management
         </button>
 
-        {/* 5. Save & close */}
+        <button style={styles.rulesBtn} onClick={() => setRulesOpen(true)}>
+          📜 রুল্স ও গাইড
+        </button>
+
         <button style={styles.closeBtn} onClick={onClose}>
           ✅ Save & Close
         </button>
       </div>
 
       {moneyModalOpen && <MoneyManagementModal onClose={() => setMoneyModalOpen(false)} />}
+      {rulesOpen && <RulesPage onClose={() => setRulesOpen(false)} />}
     </div>
   )
 }
@@ -212,6 +233,18 @@ const styles = {
     borderRadius: 10,
     padding: '12px 0',
     color: C.text,
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: 'pointer',
+  },
+  rulesBtn: {
+    width: '100%',
+    marginTop: 8,
+    background: C.panel,
+    border: `1px solid ${C.gold}55`,
+    borderRadius: 10,
+    padding: '12px 0',
+    color: C.gold,
     fontWeight: 700,
     fontSize: 13,
     cursor: 'pointer',
