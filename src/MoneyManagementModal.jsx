@@ -1,6 +1,7 @@
-// MoneyManagementModal.jsx — replaces the old AmountSetModal.jsx.
-// 🔴 Risk per trade is a hardcoded 1% — shown here but NEVER editable. There
-// is no input, slider, or setting anywhere in this file that can change it.
+// MoneyManagementModal.jsx
+// ✅ FINAL VERSION:
+// - input type="text" + inputMode="decimal" (better mobile keyboard)
+// - unchanged core logic (already good)
 
 import React, { useEffect, useState } from 'react'
 import { C, FIXED_RISK_PERCENT } from './constants.js'
@@ -20,7 +21,7 @@ export default function MoneyManagementModal({ onClose }) {
       }
 
       const alertPref = localStorage.getItem('rtx_drawdown_alert_on')
-      setDrawdownAlertOn(alertPref !== 'off') // default ON
+      setDrawdownAlertOn(alertPref !== 'off')
 
       const today = new Date().toISOString().slice(0, 10)
       const storedDate = localStorage.getItem('rtx_daily_loss_date')
@@ -30,7 +31,7 @@ export default function MoneyManagementModal({ onClose }) {
         setLossCountToday(0)
       }
     } catch (e) {
-      console.error('MoneyManagementModal: failed to read localStorage:', e.message)
+      console.error('MoneyManagementModal: read failed:', e.message)
     }
   }, [])
 
@@ -43,8 +44,9 @@ export default function MoneyManagementModal({ onClose }) {
     try {
       localStorage.setItem('rtx_account_balance', String(val))
       setSavedBalance(val)
+      alert('✅ ব্যালেন্স সংরক্ষিত হয়েছে')
     } catch (e) {
-      console.error('MoneyManagementModal: failed to save balance:', e.message)
+      console.error('MoneyManagementModal: save failed:', e.message)
     }
   }
 
@@ -54,7 +56,7 @@ export default function MoneyManagementModal({ onClose }) {
       setSavedBalance(null)
       setBalanceInput('')
     } catch (e) {
-      console.error('MoneyManagementModal: failed to delete balance:', e.message)
+      console.error('MoneyManagementModal: delete failed:', e.message)
     }
   }
 
@@ -64,7 +66,7 @@ export default function MoneyManagementModal({ onClose }) {
     try {
       localStorage.setItem('rtx_drawdown_alert_on', next ? 'on' : 'off')
     } catch (e) {
-      console.error('MoneyManagementModal: failed to save drawdown toggle:', e.message)
+      console.error('MoneyManagementModal: toggle save failed:', e.message)
     }
   }
 
@@ -78,10 +80,10 @@ export default function MoneyManagementModal({ onClose }) {
 
         <div style={styles.label}>Account Balance (USD)</div>
         <input
-          type="number"
+          type="text"
           inputMode="decimal"
           value={balanceInput}
-          onChange={(e) => setBalanceInput(e.target.value)}
+          onChange={(e) => setBalanceInput(e.target.value.replace(/[^0-9.]/g, ''))}
           placeholder="যেমন: 5000"
           style={styles.input}
         />
@@ -101,14 +103,15 @@ export default function MoneyManagementModal({ onClose }) {
           <div style={styles.riskLabel}>Risk per trade</div>
           <div style={styles.riskValue}>1% — fixed, non-editable</div>
           {riskAmount && (
-            <div style={styles.riskAmount}>= ${riskAmount} per trade (of ${savedBalance})</div>
+            <div style={styles.riskAmount}>
+              = ${riskAmount} per trade (of ${savedBalance})
+            </div>
           )}
         </div>
 
         <div style={styles.explainerBox}>
-          ✅ প্রতি ট্রেডে ব্যালেন্সের মাত্র ১% ঝুঁকি — জিতুন বা হারুন, পরিমাণ সবসময় একই থাকে। ❌ লস
-          হলে পরের ট্রেডে সাইজ বাড়ানো (Martingale) এই অ্যাপে সাপোর্ট করা হয় না, কারণ এটি অ্যাকাউন্ট
-          উড়িয়ে দেওয়ার সবচেয়ে বড় কারণ।
+          ✅ প্রতি ট্রেডে ব্যালেন্সের মাত্র ১% ঝুঁকি — জিতুন বা হারুন, পরিমাণ সবসময় একই থাকে।
+          ❌ লস হলে পরের ট্রেডে সাইজ বাড়ানো (Martingale) এই অ্যাপে সাপোর্ট করা হয় না।
         </div>
 
         <div style={styles.toggleRow}>
@@ -246,4 +249,4 @@ const styles = {
     fontSize: 14,
     cursor: 'pointer',
   },
-        }
+      }
