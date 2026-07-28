@@ -1,11 +1,10 @@
 // priceActionFibEngine.js — Mode 5: PRICE ACTION + FIBONACCI
-// ✅ FIXES:
-// 1. buffer: atr*0.3 → atr*0.5
-// 2. HTF logic: 4h primary only
-// 3. Bullish reversal candle — tautological condition fixed
-//    (now checks actual pin bar / strong body ratio)
-// 4. Bearish reversal — added wick ratio check
-// 5. SL inversion guard confirmed present
+// ✅ FINAL VERSION:
+// - TP order enforced
+// - TP2 fallback if fib extreme invalid
+// - Reversal candle body ratio check
+// - buffer atr*0.5
+// - HTF 4h primary only
 
 import { findSwings, calcATR, isFiniteNumber } from './smartMoney.js'
 
@@ -49,7 +48,6 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
     entryZoneHigh = fibLow + range * GOLDEN_POCKET_HIGH
   }
 
-  // Guard: if fibHigh === fibLow the range is degenerate
   if (!isFiniteNumber(entryZoneLow) || !isFiniteNumber(entryZoneHigh)) {
     return { noSignal: true }
   }
@@ -67,18 +65,14 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
 
     if (impulseIsUp) {
       const inZone = c.low <= entryZoneHigh && c.low >= entryZoneLow
-      // ✅ FIX: proper reversal check — bullish body + strong body ratio (pin bar or engulfing)
-      const bullishReversalCandle =
-        c.close > c.open && bodyRatio >= 0.4
+      const bullishReversalCandle = c.close > c.open && bodyRatio >= 0.4
       if (inZone && bullishReversalCandle) {
         direction = 'LONG'
         break
       }
     } else {
       const inZone = c.high >= entryZoneLow && c.high <= entryZoneHigh
-      // ✅ FIX: proper reversal check — bearish body + body ratio
-      const bearishReversalCandle =
-        c.close < c.open && bodyRatio >= 0.4
+      const bearishReversalCandle = c.close < c.open && bodyRatio >= 0.4
       if (inZone && bearishReversalCandle) {
         direction = 'SHORT'
         break
@@ -88,7 +82,6 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
 
   if (!direction) return { noSignal: true }
 
-  // ✅ FIX: 4h is primary — 1h conflict no longer blocks signal
   const htfAgreesBullish = htfBias4h !== 'Bearish'
   const htfAgreesBearish = htfBias4h !== 'Bullish'
 
@@ -103,27 +96,43 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
   if (!stillValid) return { noSignal: true }
 
   const entry = lastCandle.close
-  // ✅ FIX: buffer increased from 0.3 to 0.5
   const buffer = atr * 0.5
 
   let sl, tp1, tp2, tp3
   if (direction === 'LONG') {
     sl = fibLow - buffer
     const risk = entry - sl
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry + risk * 1.5
-    tp2 = fibHigh
-    tp3 = fibHigh + (fibHigh - fibLow) * 0.272
+    const extensionTarget = fibHigh + (fibHigh - fibLow) * 0.272
+    tp3 = extensionTarget > entry + risk * 3 ? extensionTarget : entry + risk * 3
+    tp2 = fibHigh > tp1 && fibHigh < tp3
+      ? fibHigh
+      : entry + risk * 2.25
   } else {
     sl = fibHigh + buffer
     const risk = sl - entry
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry - risk * 1.5
-    tp2 = fibLow
-    tp3 = fibLow - (fibHigh - fibLow) * 0.272
+    const extensionTarget = fibLow - (fibHigh - fibLow) * 0.272
+    tp3 = extensionTarget < entry - risk * 3 ? extensionTarget : entry - risk * 3
+    tp2 = fibLow < tp1 && fibLow > tp3
+      ? fibLow
+      : entry - risk * 2.25
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
   if (direction === 'LONG' && sl >= entry) return { noSignal: true }
   if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
+
+  if (direction === 'LONG' && !(tp1 < tp2 && tp2 < tp3 && tp1 > entry)) {
+    return { noSignal: true }
+  }
+  if (direction === 'SHORT' && !(tp1 > tp2 && tp2 > tp3 && tp1 < entry)) {
+    return { noSignal: true }
+  }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
@@ -146,10 +155,7 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
         ? 'Bullish Golden Pocket Reversal'
         : 'Bearish Golden Pocket Reversal',
     quickStats: [
-      {
-        label: 'Fib Zone',
-        value: `${entryZoneLow.toFixed(5)} - ${entryZoneHigh.toFixed(5)}`,
-      },
+      { label: 'Fib Zone', value: `${entryZoneLow.toFixed(5)} - ${entryZoneHigh.toFixed(5)}` },
       { label: 'Impulse Range', value: (fibHigh - fibLow).toFixed(5) },
       { label: 'Grade', value: 'B' },
     ],
@@ -159,7 +165,7 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
     ],
     detail:
       direction === 'LONG'
-        ? 'একটি bullish impulse leg-এর পর দাম 61.8–79% Fibonacci golden pocket-এ retrace করেছিল এবং সেখানে একটি bullish reversal candle তৈরি হয়েছিল — impulse leg-এর ধারাবাহিকতা আবার শুরু হওয়ার সম্ভাবনা তৈরি করেছে।'
-        : 'একটি bearish impulse leg-এর পর দাম 61.8–79% Fibonacci golden pocket-এ retrace করেছিল এবং সেখানে একটি bearish reversal candle তৈরি হয়েছিল — impulse leg-এর ধারাবাহিকতা আবার শুরু হওয়ার সম্ভাবনা তৈরি করেছে।',
+        ? 'একটি bullish impulse leg-এর পর দাম 61.8–79% Fibonacci golden pocket-এ retrace করেছিল এবং সেখানে একটি bullish reversal candle তৈরি হয়েছিল।'
+        : 'একটি bearish impulse leg-এর পর দাম 61.8–79% Fibonacci golden pocket-এ retrace করেছিল এবং সেখানে একটি bearish reversal candle তৈরি হয়েছিল।',
   }
-      }
+            }
