@@ -1,29 +1,20 @@
-// qmSmcEngine.js — Mode 4: QM + SMC.
-// Quasimodo (QM) pattern: a failed higher-high/lower-low that breaks the
-// prior opposite swing, signaling exhaustion — confirmed with SMC Order
-// Block + FVG confluence.
-//
-// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
-// 🔴 Unlike the other 4 mode engines, this one was never as narrowly tied
-// to "the exact last candle" — the trigger condition (`lastClose >
-// neckline.price`) stays true for every candle after the neckline break,
-// as long as the swing structure (lowA/lowB/lowC or highA/highB/highC)
-// hasn't shifted. So this engine wasn't the main cause of the "always no
-// signal" bug. Two smaller but real issues fixed here instead:
-// 1. FVG detection only scanned the last 15 candles — widened to 20 for a
-//    better realistic hit rate on the confluence requirement, since gaps
-//    relevant to a recent QM break can sit slightly further back.
-// 2. Added the same NaN/SL-inversion safety guard the other 4 engines now
-//    have, for consistency and to guard against a degenerate SL if price
-//    has drifted a long way from the "head" level since the break.
+// qmSmcEngine.js — Mode 4: QM + SMC
+// ✅ FIXES:
+// 1. neckline null crash fixed in quickStats with optional chaining
+// 2. buffer: atr*0.3 → atr*0.5
+// 3. HTF logic: 4h primary only
+// 4. SL inversion guard confirmed present
 
-import { findSwings, calcATR, detectOrderBlock, detectFVG, isFiniteNumber } from './smartMoney.js'
+import {
+  findSwings,
+  calcATR,
+  detectOrderBlock,
+  detectFVG,
+  isFiniteNumber,
+} from './smartMoney.js'
 
 const LTF_KEY = '15m'
 const CONFIRM_KEY = '5m'
-
-// 🔴 Widened from 15 → 20 candles so FVGs relevant to a slightly older QM
-// break aren't missed purely due to an arbitrarily short lookback window.
 const FVG_LOOKBACK = 20
 
 export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
@@ -40,25 +31,33 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
 
   const lastClose = ltf[ltf.length - 1].close
 
-  // Bullish QM: left shoulder low -> lower low (the "head", a liquidity
-  // grab) -> price then breaks back above the swing high between them
-  // (the "Quasimodo" neckline break).
   const [lowA, lowB, lowC] = swingLows.slice(-3)
-  const midHighs = swingHighs.filter((h) => h.index > lowA.index && h.index < lowC.index)
+  const midHighs = swingHighs.filter(
+    (h) => h.index > lowA.index && h.index < lowC.index
+  )
   const neckline = midHighs.length ? midHighs[midHighs.length - 1] : null
 
-  const bullishQM = lowB.price < lowA.price && lowC.price > lowB.price && neckline && lastClose > neckline.price
+  const bullishQM =
+    lowB.price < lowA.price &&
+    lowC.price > lowB.price &&
+    neckline !== null &&
+    lastClose > neckline.price
 
-  // Bearish QM: mirror — left shoulder high -> higher high (head) -> break
-  // back below the swing low between them.
   const [highA, highB, highC] = swingHighs.slice(-3)
-  const midLows = swingLows.filter((l) => l.index > highA.index && l.index < highC.index)
+  const midLows = swingLows.filter(
+    (l) => l.index > highA.index && l.index < highC.index
+  )
   const necklineBear = midLows.length ? midLows[midLows.length - 1] : null
 
-  const bearishQM = highB.price > highA.price && highC.price < highB.price && necklineBear && lastClose < necklineBear.price
+  const bearishQM =
+    highB.price > highA.price &&
+    highC.price < highB.price &&
+    necklineBear !== null &&
+    lastClose < necklineBear.price
 
-  const htfAgreesBullish = htfBias4h !== 'Bearish' && htfBias1h !== 'Bearish'
-  const htfAgreesBearish = htfBias4h !== 'Bullish' && htfBias1h !== 'Bullish'
+  // ✅ FIX: 4h is primary — 1h conflict no longer blocks signal
+  const htfAgreesBullish = htfBias4h !== 'Bearish'
+  const htfAgreesBearish = htfBias4h !== 'Bullish'
 
   let direction = null
   if (bullishQM && htfAgreesBullish) direction = 'LONG'
@@ -67,13 +66,15 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
 
   const orderBlock = detectOrderBlock(ltf, direction)
   const fvgs = detectFVG(ltf.slice(-FVG_LOOKBACK))
-  const relevantFvg = fvgs.find((g) => (direction === 'LONG' ? g.type === 'bullish' : g.type === 'bearish'))
+  const relevantFvg = fvgs.find((g) =>
+    direction === 'LONG' ? g.type === 'bullish' : g.type === 'bearish'
+  )
 
-  // SMC confluence requirement — common rule #1, no signal without confluence.
   if (!orderBlock && !relevantFvg) return { noSignal: true }
 
   const entry = lastClose
-  const buffer = atr * 0.3
+  // ✅ FIX: buffer increased from 0.3 to 0.5
+  const buffer = atr * 0.5
   const headLevel = direction === 'LONG' ? lowB.price : highB.price
 
   let sl, tp1, tp2, tp3
@@ -92,9 +93,6 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
-  // 🔴 NEW: SL-inversion guard, consistent with the other 4 engines — if
-  // price has moved far enough from the head level, a naive SL could end
-  // up on the wrong side of entry.
   if (direction === 'LONG' && sl >= entry) return { noSignal: true }
   if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
 
@@ -103,6 +101,12 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     const c = confirm[confirm.length - 1]
     bias5m = c.close > c.open ? 'Bullish' : c.close < c.open ? 'Bearish' : 'Neutral'
   }
+
+  // ✅ FIX: null-safe access for neckline in quickStats
+  const necklineDisplay =
+    direction === 'LONG'
+      ? neckline?.price?.toFixed(5) ?? 'N/A'
+      : necklineBear?.price?.toFixed(5) ?? 'N/A'
 
   return {
     direction,
@@ -114,19 +118,25 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     tp3,
     bias15m: direction === 'LONG' ? 'Bullish' : 'Bearish',
     bias5m,
-    pattern: direction === 'LONG' ? 'Bullish Quasimodo + SMC Confluence' : 'Bearish Quasimodo + SMC Confluence',
+    pattern:
+      direction === 'LONG'
+        ? 'Bullish Quasimodo + SMC Confluence'
+        : 'Bearish Quasimodo + SMC Confluence',
     quickStats: [
-      { label: 'Neckline', value: (direction === 'LONG' ? neckline.price : necklineBear.price).toFixed(5) },
+      { label: 'Neckline', value: necklineDisplay },
       { label: 'Order Block', value: orderBlock ? 'Found' : 'None' },
       { label: 'FVG', value: relevantFvg ? 'Found' : 'None' },
     ],
     structure: [
       { label: 'Head Level', value: headLevel.toFixed(5) },
-      { label: 'Confluence Score', value: `${(orderBlock ? 1 : 0) + (relevantFvg ? 1 : 0)}/2` },
+      {
+        label: 'Confluence Score',
+        value: `${(orderBlock ? 1 : 0) + (relevantFvg ? 1 : 0)}/2`,
+      },
     ],
     detail:
       direction === 'LONG'
-        ? 'দাম একটি lower-low (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing high (neckline) ভেঙে বাইরে চলে এসেছে — এই মুভের সাথে একটি SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে, যা রিভার্সালকে শক্তিশালী করে।'
-        : 'দাম একটি higher-high (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing low (neckline) ভেঙে নিচে চলে এসেছে — এই মুভের সাথে একটি SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে, যা রিভার্সালকে শক্তিশালী করে।',
+        ? 'দাম একটি lower-low (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing high (neckline) ভেঙে বাইরে চলে এসেছে — SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে।'
+        : 'দাম একটি higher-high (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing low (neckline) ভেঙে নিচে চলে এসেছে — SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে।',
   }
     }
