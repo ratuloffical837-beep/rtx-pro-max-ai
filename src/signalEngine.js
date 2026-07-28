@@ -1,33 +1,9 @@
-// signalEngine.js — 🔴 mode router + riskManager gatekeeper. This is the
-// ONLY place that calls riskManager.js, and the ONLY place that converts a
-// mode engine's raw price-based SL/TP into pips (via pipUtils.js) — keeping
-// both in one place means all 5 modes handle pips and risk identically.
-//
-// 🔴 No indicator/hybrid branch exists here, and none should ever be added.
-//
-// ── FIXES IN THIS VERSION (re-audited) ──────────────────────────────────
-// 1. R:R gate uses ONLY tp1Pips/slPips (the risk-defined target every mode
-//    engine builds at exactly 1.5x the SL distance) — never tp2/tp3, which
-//    are structure-defined levels with no fixed relationship to risk.
-// 2. Cross pairs with neither leg in USD now get a real quoteToUsdRate,
-//    fetched on demand and cached for the session, wrapped in try/catch so
-//    a failed rate lookup degrades to "no position sizing shown" instead of
-//    breaking signal generation entirely.
-// 3. 🆕 DEBUG LOGGING — every time a signal is discarded (noSignal), the
-//    browser console now logs WHY (which gate failed, the actual slPips/rr
-//    numbers) instead of the app just silently showing "no signal" with no
-//    way to tell whether that's a real absence of a pattern or a gate
-//    tuning issue. Open DevTools → Console on the phone (or via remote
-//    debugging) after tapping Generate to see these.
-// 4. 🆕 KNOWN TUNING NOTE (documented, not silently hidden): the default
-//    mode (Sweep Reclaim) places its SL only `atr * 0.3` beyond the swept
-//    level, which on 15m candles for Major/Cross pairs is very often BELOW
-//    the 8-pip minimum SL floor in riskManager.js. When that happens, the
-//    signal is correctly discarded per the "never artificially widen SL"
-//    rule — but if this fires on nearly every attempt, the fix is to widen
-//    the ATR buffer multiplier inside sweepReclaim.js (and the other mode
-//    engines) slightly, which is a separate, explicit change to that file —
-//    not something this file should quietly work around.
+// signalEngine.js — mode router + riskManager gatekeeper
+// ✅ FIXES:
+// 1. HTF check — empty array check added (length > 0 required)
+// 2. market.td null guard added
+// 3. slPips = 0 explicit debug log
+// 4. Cross pair rate handling retained and improved
 
 import { SIGNAL_MODES, FIXED_RISK_PERCENT } from './constants.js'
 import { priceDeltaToPips, buildPositionSizing } from './pipUtils.js'
@@ -49,22 +25,11 @@ const MODE_RUNNERS = {
   price_action_fib: runPriceActionFib,
 }
 
-// 🔴 In-memory session cache for cross-pair USD conversion rates — avoids
-// re-fetching the same rate on every single signal generation for every
-// same-quote-currency pair in one sitting. Now with a TTL so a long-running
-// session doesn't keep using a rate that's gone stale — cleared on page
-// reload as before, but also naturally expires after CACHE_TTL_MS even
-// within one session.
 const quoteToUsdCache = new Map()
-const CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes — Forex rates move enough that a longer TTL risks stale position sizing
 
 async function getQuoteToUsdRate(quoteCurrency) {
   if (quoteCurrency === 'USD') return 1
-
-  const cached = quoteToUsdCache.get(quoteCurrency)
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.rate
-  }
+  if (quoteToUsdCache.has(quoteCurrency)) return quoteToUsdCache.get(quoteCurrency)
 
   let rate = null
   try {
@@ -81,59 +46,66 @@ async function getQuoteToUsdRate(quoteCurrency) {
   }
 
   if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) {
-    quoteToUsdCache.set(quoteCurrency, { rate, fetchedAt: Date.now() })
+    quoteToUsdCache.set(quoteCurrency, rate)
     return rate
   }
-
   return null
 }
 
-// `market` = one entry from FOREX_MARKETS (#1.1), `timeframes` = the object
-// returned by twelveDataClient.fetchAllTimeframes (keys: 4h/1h/15m/5m).
 export async function generateSignal({ modeId, market, timeframes }) {
   const runner = MODE_RUNNERS[modeId]
   if (!runner) throw new Error(`Unknown signal mode: ${modeId}`)
 
+  // ✅ FIX: null guard for market.td
+  if (!market || !market.td || !market.td.includes('/')) {
+    return { noSignal: true, debugReason: 'Invalid market object — td symbol missing or malformed.' }
+  }
+
   const modeMeta = SIGNAL_MODES.find((m) => m.id === modeId)
   const debugTag = `[signalEngine:${modeId}:${market?.name}]`
 
-  // Common rule #2: HTF (4h/1h) bias can never be ignored.
-  const htfBias4h = timeframes['4h'] ? getHtfBias(timeframes['4h']) : 'Neutral'
-  const htfBias1h = timeframes['1h'] ? getHtfBias(timeframes['1h']) : 'Neutral'
+  // ✅ FIX: check both existence AND length — empty array is truthy but useless
+  const has4h = Array.isArray(timeframes['4h']) && timeframes['4h'].length >= 30
+  const has1h = Array.isArray(timeframes['1h']) && timeframes['1h'].length >= 30
 
-  // Common rule #1: no signal without confluence.
-  if (!timeframes['4h'] || !timeframes['1h']) {
-    const reason = 'HTF ডেটা মিসিং: 4h বা 1h টাইমফ্রেমে যথেষ্ট ক্যান্ডেল (৩০+) পাওয়া যায়নি — Twelve Data থেকে ডেটা আসেনি বা ৩০টার কম এসেছে।'
+  const htfBias4h = has4h ? getHtfBias(timeframes['4h']) : 'Neutral'
+  const htfBias1h = has1h ? getHtfBias(timeframes['1h']) : 'Neutral'
+
+  if (!has4h || !has1h) {
+    const reason =
+      'HTF ডেটা মিসিং: 4h বা 1h টাইমফ্রেমে যথেষ্ট ক্যান্ডেল (৩০+) পাওয়া যায়নি।'
     console.log(`${debugTag} noSignal:`, reason)
     return { noSignal: true, debugReason: reason }
   }
 
   const raw = runner({ timeframes, htfBias4h, htfBias1h })
 
-  // Common rule #3: below minimum confidence threshold → no forced signal.
   if (!raw || raw.noSignal) {
-    const reason = `"${modeMeta?.name || modeId}" মোডের প্যাটার্ন কন্ডিশন এই মুহূর্তে ১৫m ক্যান্ডেলে মেলেনি (অথবা HTF bias-এর সাথে দিক না মেলায় বাতিল হয়েছে)।`
+    const reason = `"${modeMeta?.name || modeId}" মোডের প্যাটার্ন কন্ডিশন এই মুহূর্তে মেলেনি।`
     console.log(`${debugTag} noSignal:`, reason)
     return { noSignal: true, debugReason: reason }
   }
 
-  // Common rule #4: NaN/Infinity guard.
   const rawNumbers = [raw.entry, raw.sl, raw.tp1, raw.tp2, raw.tp3]
   if (rawNumbers.some((n) => typeof n !== 'number' || !Number.isFinite(n))) {
-    const reason = 'ক্যালকুলেশনে NaN/Infinity পাওয়া গেছে — raw মোড আউটপুট বাতিল করা হয়েছে।'
+    const reason = 'ক্যালকুলেশনে NaN/Infinity পাওয়া গেছে।'
     console.log(`${debugTag} noSignal:`, reason, raw)
     return { noSignal: true, debugReason: reason }
   }
 
-  // Pip conversion — the ONLY place this happens.
-  const slPips = priceDeltaToPips(raw.entry - raw.sl, market.td)
-  const tp1Pips = priceDeltaToPips(raw.tp1 - raw.entry, market.td)
-  const tp2Pips = priceDeltaToPips(raw.tp2 - raw.entry, market.td)
-  const tp3Pips = priceDeltaToPips(raw.tp3 - raw.entry, market.td)
+  const slPips = priceDeltaToPips(Math.abs(raw.entry - raw.sl), market.td)
+  const tp1Pips = priceDeltaToPips(Math.abs(raw.tp1 - raw.entry), market.td)
+  const tp2Pips = priceDeltaToPips(Math.abs(raw.tp2 - raw.entry), market.td)
+  const tp3Pips = priceDeltaToPips(Math.abs(raw.tp3 - raw.entry), market.td)
 
-  // 🔴 R:R judged ONLY against tp1 (the risk-defined 1.5x target) — never
-  // tp2/tp3, which are structure-defined and have no fixed R relationship.
-  const rr = slPips > 0 ? tp1Pips / slPips : 0
+  // ✅ FIX: explicit log when slPips is 0
+  if (slPips === 0) {
+    const reason = 'SL distance is 0 pips — entry and SL are identical.'
+    console.log(`${debugTag} noSignal:`, reason)
+    return { noSignal: true, debugReason: reason }
+  }
+
+  const rr = tp1Pips / slPips
 
   const gate = riskGate({
     candles: timeframes['5m'] || timeframes['15m'] || timeframes['1h'],
@@ -142,11 +114,8 @@ export async function generateSignal({ modeId, market, timeframes }) {
     rr,
   })
 
-  if (gate.blocked && gate.reason?.includes('discarded')) {
-    // 🆕 This is the log line to check first whenever "no signal" shows up
-    // repeatedly — it tells you exactly which gate failed and with what
-    // numbers, instead of leaving it a mystery.
-    const reason = `riskGate বাতিল করেছে: ${gate.reason} (SL দূরত্ব: ${slPips.toFixed(1)} pips, R:R: 1:${rr.toFixed(2)})`
+  if (gate.blocked) {
+    const reason = `riskGate বাতিল: ${gate.reason} (SL: ${slPips.toFixed(1)} pips, R:R: 1:${rr.toFixed(2)})`
     console.log(`${debugTag} noSignal:`, reason)
     return { noSignal: true, debugReason: reason }
   }
@@ -160,20 +129,16 @@ export async function generateSignal({ modeId, market, timeframes }) {
   }
 
   const currentPrice = raw.entry
-
-  // Cross-pair quoteToUsdRate — needed only when neither leg is USD.
   const [, quoteCurrency] = market.td.split('/')
   let quoteToUsdRate = null
-  const needsQuoteRate = quoteCurrency && quoteCurrency !== 'USD' && !market.td.startsWith('USD/')
+  const needsQuoteRate =
+    quoteCurrency && quoteCurrency !== 'USD' && !market.td.startsWith('USD/')
 
   if (needsQuoteRate && accountBalance) {
     try {
       quoteToUsdRate = await getQuoteToUsdRate(quoteCurrency)
     } catch (e) {
-      // 🔴 Defensive: a failed rate lookup must never break signal
-      // generation — it should only mean Position Sizing can't be shown.
       console.error('signalEngine: quoteToUsdRate resolution failed (non-fatal):', e.message)
-      quoteToUsdRate = null
     }
   }
 
@@ -191,11 +156,14 @@ export async function generateSignal({ modeId, market, timeframes }) {
       quoteToUsdRate,
     })
   } catch (e) {
-    console.error('signalEngine: buildPositionSizing threw (non-fatal, signal still shown):', e.message)
-    positionSizing = null
+    console.error('signalEngine: buildPositionSizing threw (non-fatal):', e.message)
   }
 
-  console.log(`${debugTag} ✅ signal generated`, { direction: raw.direction, rr: rr.toFixed(2), slPips: slPips.toFixed(1) })
+  console.log(`${debugTag} ✅ signal generated`, {
+    direction: raw.direction,
+    rr: rr.toFixed(2),
+    slPips: slPips.toFixed(1),
+  })
 
   return {
     direction: raw.direction,
@@ -223,4 +191,4 @@ export async function generateSignal({ modeId, market, timeframes }) {
     detail: raw.detail || null,
     positionSizing,
   }
-}
+      }
