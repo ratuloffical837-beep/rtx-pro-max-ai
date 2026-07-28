@@ -51,14 +51,19 @@ const MODE_RUNNERS = {
 
 // 🔴 In-memory session cache for cross-pair USD conversion rates — avoids
 // re-fetching the same rate on every single signal generation for every
-// same-quote-currency pair in one sitting. Cleared on page reload.
+// same-quote-currency pair in one sitting. Now with a TTL so a long-running
+// session doesn't keep using a rate that's gone stale — cleared on page
+// reload as before, but also naturally expires after CACHE_TTL_MS even
+// within one session.
 const quoteToUsdCache = new Map()
+const CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes — Forex rates move enough that a longer TTL risks stale position sizing
 
 async function getQuoteToUsdRate(quoteCurrency) {
   if (quoteCurrency === 'USD') return 1
 
-  if (quoteToUsdCache.has(quoteCurrency)) {
-    return quoteToUsdCache.get(quoteCurrency)
+  const cached = quoteToUsdCache.get(quoteCurrency)
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.rate
   }
 
   let rate = null
@@ -76,7 +81,7 @@ async function getQuoteToUsdRate(quoteCurrency) {
   }
 
   if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) {
-    quoteToUsdCache.set(quoteCurrency, rate)
+    quoteToUsdCache.set(quoteCurrency, { rate, fetchedAt: Date.now() })
     return rate
   }
 
@@ -218,4 +223,4 @@ export async function generateSignal({ modeId, market, timeframes }) {
     detail: raw.detail || null,
     positionSizing,
   }
-  }
+}
