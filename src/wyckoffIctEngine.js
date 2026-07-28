@@ -1,11 +1,8 @@
 // wyckoffIctEngine.js — Mode 3: WYCKOFF + ICT/SMC
-// ✅ FINAL VERSION:
-// - TP order enforced
-// - TP2 fallback if rangeHigh/rangeLow outside TP1/TP3
-// - choch null-safe
-// - variable 'window' renamed to 'rangeWindow'
-// - buffer atr*0.5
-// - HTF 4h primary only
+// ✅ RELAXED VERSION:
+// - CHoCH is now BONUS confirmation, not hard requirement
+// - Signal generates if Spring/Upthrust + HTF agree
+// - CHoCH presence makes strength "Strong", absence = "Moderate"
 
 import {
   findSwings,
@@ -72,21 +69,20 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
   const htfAgreesBearish = htfBias4h !== 'Bullish'
 
   let direction = null
-  if (
-    triggerDirection === 'LONG' &&
-    htfAgreesBullish &&
-    choch?.direction === 'bullish'
-  ) {
+
+  // ✅ RELAXED: CHoCH is now bonus, not required
+  if (triggerDirection === 'LONG' && htfAgreesBullish) {
+    // If CHoCH is bearish, it conflicts — block signal
+    if (choch?.direction === 'bearish') return { noSignal: true }
     direction = 'LONG'
-  } else if (
-    triggerDirection === 'SHORT' &&
-    htfAgreesBearish &&
-    choch?.direction === 'bearish'
-  ) {
+  } else if (triggerDirection === 'SHORT' && htfAgreesBearish) {
+    if (choch?.direction === 'bullish') return { noSignal: true }
     direction = 'SHORT'
   } else {
     return { noSignal: true }
   }
+
+  const chochAgrees = choch?.direction === (direction === 'LONG' ? 'bullish' : 'bearish')
 
   const orderBlock = detectOrderBlock(ltf, direction)
   const entry = last.close
@@ -132,9 +128,13 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
     bias5m = c.close > c.open ? 'Bullish' : c.close < c.open ? 'Bearish' : 'Neutral'
   }
 
+  // ✅ Strength based on how many confluences we got
+  const confluenceCount = (chochAgrees ? 1 : 0) + (orderBlock ? 1 : 0)
+  const strength = confluenceCount === 2 ? 'Strong' : confluenceCount === 1 ? 'Moderate' : 'Weak'
+
   return {
     direction,
-    strength: orderBlock ? 'Strong' : 'Moderate',
+    strength,
     entry,
     sl,
     tp1,
@@ -144,23 +144,23 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
     bias5m,
     pattern:
       direction === 'LONG'
-        ? 'Wyckoff Spring + Bullish CHoCH'
-        : 'Wyckoff Upthrust + Bearish CHoCH',
+        ? 'Wyckoff Spring' + (chochAgrees ? ' + Bullish CHoCH' : '')
+        : 'Wyckoff Upthrust' + (chochAgrees ? ' + Bearish CHoCH' : ''),
     quickStats: [
       { label: 'Range High/Low', value: `${rangeHigh.toFixed(5)} / ${rangeLow.toFixed(5)}` },
-      { label: 'CHoCH', value: choch?.type ?? 'N/A' },
-      { label: 'Order Block', value: orderBlock ? 'Found' : 'Not found' },
+      { label: 'CHoCH', value: chochAgrees ? (choch?.type ?? 'Yes') : 'None' },
+      { label: 'Order Block', value: orderBlock ? 'Found' : 'None' },
     ],
     structure: [
       {
         label: 'Wyckoff Phase',
         value: direction === 'LONG' ? 'Accumulation (Spring)' : 'Distribution (Upthrust)',
       },
-      { label: 'CHoCH Level', value: choch?.level?.toFixed(5) ?? 'N/A' },
+      { label: 'Confluence', value: `${confluenceCount}/2` },
     ],
     detail:
       direction === 'LONG'
-        ? 'দাম একটি accumulation range-এর নিচে একটি Spring (false breakdown) তৈরি করেছিল, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bullish CHoCH কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markup phase শুরুর সাধারণ ইঙ্গিত।'
-        : 'দাম একটি distribution range-এর ওপরে একটি Upthrust (false breakout) তৈরি করেছিল, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bearish CHoCH কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markdown phase শুরুর সাধারণ ইঙ্গিত।',
+        ? 'দাম একটি accumulation range-এর নিচে Spring (false breakdown) তৈরি করেছিল এবং আবার range-এ ফিরে এসেছে — Wyckoff markup phase শুরুর ইঙ্গিত।'
+        : 'দাম একটি distribution range-এর ওপরে Upthrust (false breakout) তৈরি করেছিল এবং আবার range-এ ফিরে এসেছে — Wyckoff markdown phase শুরুর ইঙ্গিত।',
   }
-  }
+    }
