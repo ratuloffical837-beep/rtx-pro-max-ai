@@ -1,12 +1,24 @@
 // pipUtils.js — 🔴 exact pip math, do not approximate.
+//
+// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
+// 🔴 EXOTIC PIP SIZE BUG: HUF and CZK are large-nominal-value currencies
+// (like JPY) that trade with 2-3 decimal precision, not the standard
+// 4-decimal precision of majors/most crosses. Before this fix, getPipSize()
+// only special-cased JPY and treated every other pair — including
+// USD/HUF, EUR/HUF, USD/CZK — as a standard 0.0001-pip pair. Since HUF/CZK
+// actually move in units closer to JPY's scale (e.g. USD/HUF trades around
+// 350-380, not 1.xxxx), using 0.0001 as the pip size would make
+// priceDeltaToPips() report a pip count roughly 100x too large, which
+// cascades into wildly wrong SL-floor checks, R:R math, and position sizing
+// for these two pairs specifically.
 
-// JPY-quoted pairs use 2-decimal pricing (pip = 0.01); everything else uses
-// 4-decimal pricing (pip = 0.0001).
-// Note: a handful of exotics (HUF, CZK) technically have different natural
-// decimal conventions on some feeds — this is a known approximation, flagged
-// here rather than silently treated as exact.
+// JPY, HUF, and CZK are large-nominal-value currencies quoted with 2-3
+// decimal precision — pip = 0.01. Everything else uses standard 4-decimal
+// pricing — pip = 0.0001.
 export function getPipSize(pairTdSymbol) {
-  return pairTdSymbol.includes('JPY') ? 0.01 : 0.0001
+  const sym = pairTdSymbol ? pairTdSymbol.toUpperCase() : ''
+  if (sym.includes('JPY') || sym.includes('HUF') || sym.includes('CZK')) return 0.01
+  return 0.0001
 }
 
 export function priceDeltaToPips(priceDelta, pairTdSymbol) {
@@ -22,8 +34,7 @@ export function pipsToPriceDelta(pips, pairTdSymbol) {
 // Pip value in USD, per 1 standard lot (100,000 units of base currency).
 // currentPrice = the pair's current price (needed when USD is not the quote currency).
 // quoteToUsdRate = only needed for cross pairs where USD is neither base nor quote
-//   (e.g. EUR/GBP) — fetch this as ONE extra lightweight price call, on demand, only
-//   when the user opens the position-sizing box for such a pair. Cache it for the session.
+//   (e.g. EUR/GBP) — fetched on demand by signalEngine.js and cached for the session.
 export function pipValuePerStandardLot(pairTdSymbol, currentPrice, quoteToUsdRate = null) {
   const pip = getPipSize(pairTdSymbol)
   const [base, quote] = pairTdSymbol.split('/')
@@ -36,7 +47,7 @@ export function pipValuePerStandardLot(pairTdSymbol, currentPrice, quoteToUsdRat
     return pip * STANDARD_LOT_UNITS
   }
   if (base === 'USD') {
-    // e.g. USD/JPY — pip value depends on the current price
+    // e.g. USD/JPY, USD/HUF, USD/CZK — pip value depends on the current price
     if (!currentPrice) return null
     return (pip * STANDARD_LOT_UNITS) / currentPrice
   }
@@ -90,4 +101,4 @@ export function buildPositionSizing({
     tp2ProfitUsd: profitFor(tp2Pips, 0.3),
     tp3ProfitUsd: profitFor(tp3Pips, 0.2),
   }
-    }
+  }
