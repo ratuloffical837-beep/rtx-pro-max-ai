@@ -144,11 +144,16 @@ export function runSweepReclaim({ timeframes, htfBias4h, htfBias1h }) {
     ],
     structure: [
       { label: 'Swept Level', value: sweepLevel.toFixed(5) },
-      { label: 'Structure Target', value: (direction === 'LONG' ? tp2 : tp2).toFixed(5) },
+      // 🔴 FIX: this was `(direction === 'LONG' ? tp2 : tp2).toFixed(5)` — a
+      // redundant ternary that returned tp2 either way (harmless, since tp2
+      // IS the correct structure target for both directions, but the dead
+      // ternary was confusing/misleading code). Simplified to a direct
+      // reference — no behavior change, just honest code.
+      { label: 'Structure Target', value: tp2.toFixed(5) },
     ],
     detail:
       direction === 'LONG'
         ? 'দাম আগের একটি swing low ভেঙে liquidity sweep করেছে, তারপর candle body আবার সেই লেভেলের ওপরে ক্লোজ করে reclaim নিশ্চিত করেছে (সাম্প্রতিক কয়েকটি ক্যান্ডেলের মধ্যে) এবং এখনো সেই স্ট্রাকচার বজায় আছে। এটি institutional buying-এর একটি সাধারণ ফুটপ্রিন্ট।'
         : 'দাম আগের একটি swing high ভেঙে liquidity sweep করেছে, তারপর candle body আবার সেই লেভেলের নিচে ক্লোজ করে reclaim নিশ্চিত করেছে (সাম্প্রতিক কয়েকটি ক্যান্ডেলের মধ্যে) এবং এখনো সেই স্ট্রাকচার বজায় আছে। এটি institutional selling-এর একটি সাধারণ ফুটপ্রিন্ট।',
   }
-    }
+}
