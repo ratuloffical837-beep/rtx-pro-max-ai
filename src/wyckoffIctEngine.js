@@ -1,10 +1,11 @@
 // wyckoffIctEngine.js — Mode 3: WYCKOFF + ICT/SMC
-// ✅ FIXES:
-// 1. 'window' variable renamed to 'rangeWindow' (global shadow fix)
-// 2. choch null crash fixed with optional chaining in quickStats/structure
-// 3. buffer: atr*0.3 → atr*0.5
-// 4. HTF logic: 4h primary only
-// 5. choch null handled before direction assignment
+// ✅ FINAL VERSION:
+// - TP order enforced
+// - TP2 fallback if rangeHigh/rangeLow outside TP1/TP3
+// - choch null-safe
+// - variable 'window' renamed to 'rangeWindow'
+// - buffer atr*0.5
+// - HTF 4h primary only
 
 import {
   findSwings,
@@ -28,7 +29,6 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
   const atr = calcATR(ltf, 14)
   if (!atr) return { noSignal: true }
 
-  // ✅ FIX: renamed from 'window' to 'rangeWindow' to avoid global shadow
   const rangeWindow = ltf.slice(-RANGE_LOOKBACK, -3)
   if (rangeWindow.length < 10) return { noSignal: true }
 
@@ -66,10 +66,8 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
 
   if (!stillValid) return { noSignal: true }
 
-  // ✅ FIX: choch null handled — if null, no structural confirmation exists
   const choch = detectBOSCHoCH(ltf)
 
-  // ✅ FIX: 4h is primary — 1h conflict no longer blocks signal
   const htfAgreesBullish = htfBias4h !== 'Bearish'
   const htfAgreesBearish = htfBias4h !== 'Bullish'
 
@@ -92,27 +90,41 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
 
   const orderBlock = detectOrderBlock(ltf, direction)
   const entry = last.close
-  // ✅ FIX: buffer increased from 0.3 to 0.5
   const buffer = atr * 0.5
 
   let sl, tp1, tp2, tp3
   if (direction === 'LONG') {
     sl = (orderBlock ? Math.min(orderBlock.low, rangeLow) : rangeLow) - buffer
     const risk = entry - sl
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry + risk * 1.5
-    tp2 = rangeHigh
     tp3 = entry + risk * 3
+    tp2 = rangeHigh > tp1 && rangeHigh < tp3
+      ? rangeHigh
+      : entry + risk * 2.25
   } else {
     sl = (orderBlock ? Math.max(orderBlock.high, rangeHigh) : rangeHigh) + buffer
     const risk = sl - entry
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry - risk * 1.5
-    tp2 = rangeLow
     tp3 = entry - risk * 3
+    tp2 = rangeLow < tp1 && rangeLow > tp3
+      ? rangeLow
+      : entry - risk * 2.25
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
   if (direction === 'LONG' && sl >= entry) return { noSignal: true }
   if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
+
+  if (direction === 'LONG' && !(tp1 < tp2 && tp2 < tp3 && tp1 > entry)) {
+    return { noSignal: true }
+  }
+  if (direction === 'SHORT' && !(tp1 > tp2 && tp2 > tp3 && tp1 < entry)) {
+    return { noSignal: true }
+  }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
@@ -135,31 +147,20 @@ export function runWyckoffIct({ timeframes, htfBias4h, htfBias1h }) {
         ? 'Wyckoff Spring + Bullish CHoCH'
         : 'Wyckoff Upthrust + Bearish CHoCH',
     quickStats: [
-      {
-        label: 'Range High/Low',
-        value: `${rangeHigh.toFixed(5)} / ${rangeLow.toFixed(5)}`,
-      },
-      // ✅ FIX: choch null safe with optional chaining
+      { label: 'Range High/Low', value: `${rangeHigh.toFixed(5)} / ${rangeLow.toFixed(5)}` },
       { label: 'CHoCH', value: choch?.type ?? 'N/A' },
       { label: 'Order Block', value: orderBlock ? 'Found' : 'Not found' },
     ],
     structure: [
       {
         label: 'Wyckoff Phase',
-        value:
-          direction === 'LONG'
-            ? 'Accumulation (Spring)'
-            : 'Distribution (Upthrust)',
+        value: direction === 'LONG' ? 'Accumulation (Spring)' : 'Distribution (Upthrust)',
       },
-      // ✅ FIX: choch null safe with optional chaining
-      {
-        label: 'CHoCH Level',
-        value: choch?.level?.toFixed(5) ?? 'N/A',
-      },
+      { label: 'CHoCH Level', value: choch?.level?.toFixed(5) ?? 'N/A' },
     ],
     detail:
       direction === 'LONG'
-        ? 'দাম একটি accumulation range-এর নিচে একটি Spring (false breakdown) তৈরি করেছিল, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bullish Change of Character (CHoCH) কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markup phase শুরুর সাধারণ ইঙ্গিত।'
-        : 'দাম একটি distribution range-এর ওপরে একটি Upthrust (false breakout) তৈরি করেছিল, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bearish Change of Character (CHoCH) কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markdown phase শুরুর সাধারণ ইঙ্গিত।',
+        ? 'দাম একটি accumulation range-এর নিচে একটি Spring (false breakdown) তৈরি করেছিল, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bullish CHoCH কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markup phase শুরুর সাধারণ ইঙ্গিত।'
+        : 'দাম একটি distribution range-এর ওপরে একটি Upthrust (false breakout) তৈরি করেছিল, তারপর আবার রেঞ্জের ভেতরে ফিরে এসে একটি bearish CHoCH কনফার্ম করেছে — Wyckoff পদ্ধতিতে এটি markdown phase শুরুর সাধারণ ইঙ্গিত।',
   }
-       }
+  }
