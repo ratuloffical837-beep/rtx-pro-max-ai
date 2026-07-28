@@ -1,20 +1,9 @@
-// PaymentPage.jsx — manual bKash/Nagad payment flow, same pattern as the
-// original crypto app. Writes a pending payment doc to Firestore and pings
-// the backend so the admin gets a Telegram approval prompt. Price comes only
-// from constants.js — never hardcoded here.
-//
-// ── FIXES IN THIS VERSION ───────────────────────────────────────────────
-// 🔴 The payment doc now includes `userId` (the Telegram user's real id, via
-// telegramUser.js). Before, no file anywhere captured this id, so
-// server.js's /webhook/:secret approve handler had nothing to key Premium
-// status on — it fell back to `phone`, which never matched what
-// /api/check-status looked up. That mismatch is the reason approving a
-// payment never actually unlocked Premium in the app.
-// 🔴 If the app isn't running inside real Telegram (isRealTelegramUser ===
-// false), we warn the person before they pay — a fallback browser id won't
-// survive a cache clear or a different device, so Premium tied to it is
-// fragile. This is a heads-up, not a hard block, since local dev/testing
-// still needs to work.
+// PaymentPage.jsx — manual bKash/Nagad payment flow
+// ✅ FINAL VERSION:
+// - Amount field is readOnly (prevents user manipulation)
+// - Clipboard copy has proper fallback + user feedback
+// - Better error messages
+// - Telegram user warning improved
 
 import React, { useState } from 'react'
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
@@ -24,25 +13,54 @@ import { getTelegramUser } from './telegramUser.js'
 
 export default function PaymentPage({ onClose }) {
   const [phone, setPhone] = useState('')
-  const [amount, setAmount] = useState(String(CONTACT.monthlyAmount))
   const [trxId, setTrxId] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
 
-  // 🔴 Resolved once per mount — this is the id everything downstream (the
-  // Firestore doc, the admin's Telegram message, /webhook/:secret's approve
-  // handler) will use to identify this person.
   const { userId, isRealTelegramUser } = getTelegramUser()
 
+  // ✅ Fixed amount — no longer user-editable
+  const amount = CONTACT.monthlyAmount
+
   function handleCopyNumber() {
+    // ✅ Modern clipboard API with fallback
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard
+        .writeText(CONTACT.paymentNumber)
+        .then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1800)
+        })
+        .catch((e) => {
+          console.error('PaymentPage: clipboard failed:', e.message)
+          fallbackCopy()
+        })
+    } else {
+      fallbackCopy()
+    }
+  }
+
+  function fallbackCopy() {
     try {
-      navigator.clipboard.writeText(CONTACT.paymentNumber)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1800)
+      const textArea = document.createElement('textarea')
+      textArea.value = CONTACT.paymentNumber
+      textArea.style.position = 'fixed'
+      textArea.style.opacity = '0'
+      document.body.appendChild(textArea)
+      textArea.select()
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textArea)
+      if (successful) {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1800)
+      } else {
+        alert(`কপি করা যায়নি — এই নম্বরটি ম্যানুয়ালি লিখুন: ${CONTACT.paymentNumber}`)
+      }
     } catch (e) {
-      console.error('PaymentPage: clipboard copy failed:', e.message)
+      console.error('PaymentPage: fallback copy failed:', e.message)
+      alert(`কপি করা যায়নি — এই নম্বরটি ম্যানুয়ালি লিখুন: ${CONTACT.paymentNumber}`)
     }
   }
 
@@ -53,6 +71,14 @@ export default function PaymentPage({ onClose }) {
       setError('⚠️ ফোন নাম্বার এবং TrxID দুটোই আবশ্যক')
       return
     }
+    if (phone.trim().length < 11) {
+      setError('⚠️ সঠিক ১১-ডিজিটের ফোন নাম্বার দিন')
+      return
+    }
+    if (trxId.trim().length < 6) {
+      setError('⚠️ সঠিক TrxID দিন (কমপক্ষে ৬ ক্যারেক্টার)')
+      return
+    }
     if (!db) {
       setError('⚠️ সার্ভার সংযোগ পাওয়া যায়নি — একটু পর আবার চেষ্টা করুন')
       return
@@ -61,39 +87,37 @@ export default function PaymentPage({ onClose }) {
     setSubmitting(true)
     try {
       const docRef = await addDoc(collection(db, 'forex_payments'), {
-        userId, // 🔴 the field server.js's approve handler now relies on
+        userId,
         phone: phone.trim(),
-        amount: Number(amount) || CONTACT.monthlyAmount,
+        amount,
         trxId: trxId.trim(),
         status: 'pending',
         createdAt: serverTimestamp(),
       })
 
-      // Notify backend so the admin gets a Telegram approval prompt. The
-      // backend never sees market/signal data — only this payment record.
       try {
         if (!BACKEND_URL) {
-          console.error('PaymentPage: VITE_BACKEND_URL is not set — cannot notify admin.')
+          console.error('PaymentPage: BACKEND_URL not set')
           setError(
-            '⚠️ পেমেন্ট তথ্য সংরক্ষিত হয়েছে, কিন্তু সার্ভার কনফিগারেশন সমস্যার কারণে এডমিনকে স্বয়ংক্রিয়ভাবে জানানো যায়নি। সাপোর্টে যোগাযোগ করুন।'
+            '⚠️ পেমেন্ট তথ্য সংরক্ষিত হয়েছে, কিন্তু সার্ভার কনফিগারেশন সমস্যায় এডমিনকে জানানো যায়নি। সাপোর্টে যোগাযোগ করুন।'
           )
         } else {
           const res = await fetch(`${BACKEND_URL}/api/notify-payment`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ paymentId: docRef.id, userId, phone: phone.trim(), trxId: trxId.trim() }),
+            body: JSON.stringify({
+              paymentId: docRef.id,
+              userId,
+              phone: phone.trim(),
+              trxId: trxId.trim(),
+            }),
           })
           const data = await res.json().catch(() => ({}))
           if (!data.ok) {
-            // Payment is still saved — just let the person know the admin
-            // notification may be delayed, so support contact still helps.
-            console.error('PaymentPage: notify-payment reported failure:', data.warning)
+            console.error('PaymentPage: notify-payment warning:', data.warning)
           }
         }
       } catch (notifyErr) {
-        // Payment record is already saved in Firestore even if the notify
-        // ping fails — the admin can still find it manually, so don't block
-        // the success state on this.
         console.error('PaymentPage: notify-payment ping failed:', notifyErr.message)
       }
 
@@ -118,13 +142,11 @@ export default function PaymentPage({ onClose }) {
           </button>
         </div>
 
-        {/* 🔴 Warn if not opened inside real Telegram — Premium tied to a
-            fallback browser id won't survive a cache clear or new device. */}
         {!isRealTelegramUser && !submitted && (
           <div style={styles.telegramWarnBox}>
-            ⚠️ এই অ্যাপটি Telegram-এর ভেতর থেকে খোলা হয়নি বলে মনে হচ্ছে। পেমেন্ট নিশ্চিত করার আগে
-            Telegram বট থেকে Mini App-টি খুলুন, নাহলে আপনার Premium স্ট্যাটাস সঠিকভাবে ট্র্যাক নাও
-            হতে পারে।
+            ⚠️ এই অ্যাপটি Telegram-এর ভেতর থেকে খোলা হয়নি বলে মনে হচ্ছে। পেমেন্টের আগে Telegram
+            বট থেকে Mini App-টি খুলুন, নাহলে আপনার Premium স্ট্যাটাস সঠিকভাবে ট্র্যাক নাও হতে
+            পারে।
           </div>
         )}
 
@@ -147,7 +169,10 @@ export default function PaymentPage({ onClose }) {
               <div style={styles.heroSubtitle}>
                 5 Institutional-Grade Strategy Modes — Now for Forex
               </div>
-              <div style={styles.priceBox}>৳{CONTACT.monthlyAmount}<span style={styles.perMonth}>/মাস</span></div>
+              <div style={styles.priceBox}>
+                ৳{CONTACT.monthlyAmount}
+                <span style={styles.perMonth}>/মাস</span>
+              </div>
             </div>
 
             <div style={styles.payBox}>
@@ -155,6 +180,9 @@ export default function PaymentPage({ onClose }) {
               <div style={styles.numberRow} onClick={handleCopyNumber}>
                 <span style={styles.number}>{CONTACT.paymentNumber}</span>
                 <span style={styles.copyTag}>{copied ? '✅ Copied' : '📋 Tap to copy'}</span>
+              </div>
+              <div style={styles.amountReminder}>
+                💰 এই সঠিক পরিমাণ পাঠান: <b>৳{amount}</b>
               </div>
             </div>
 
@@ -170,10 +198,9 @@ export default function PaymentPage({ onClose }) {
 
               <label style={styles.label}>Amount (৳)</label>
               <input
-                style={styles.input}
+                style={{ ...styles.input, opacity: 0.6, cursor: 'not-allowed' }}
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                inputMode="numeric"
+                readOnly
               />
 
               <label style={styles.label}>Transaction ID (TrxID)</label>
@@ -193,7 +220,12 @@ export default function PaymentPage({ onClose }) {
 
             <div style={styles.supportLine}>
               সমস্যা হলে সাপোর্টে যোগাযোগ করুন:{' '}
-              <a href={CONTACT.support} target="_blank" rel="noreferrer" style={styles.supportLink}>
+              <a
+                href={CONTACT.support}
+                target="_blank"
+                rel="noreferrer"
+                style={styles.supportLink}
+              >
                 {CONTACT.support}
               </a>
             </div>
@@ -267,6 +299,17 @@ const styles = {
   },
   number: { fontSize: 18, fontWeight: 800, color: C.cyan, letterSpacing: 0.5 },
   copyTag: { fontSize: 11, color: C.muted, fontWeight: 600 },
+  amountReminder: {
+    marginTop: 10,
+    padding: '8px 10px',
+    background: `${C.gold}12`,
+    border: `1px solid ${C.gold}44`,
+    borderRadius: 8,
+    fontSize: 12,
+    color: C.gold,
+    fontWeight: 600,
+    textAlign: 'center',
+  },
   form: { display: 'flex', flexDirection: 'column', gap: 4 },
   label: { fontSize: 11, fontWeight: 700, color: C.muted, marginTop: 10, marginBottom: 4 },
   input: {
@@ -304,4 +347,4 @@ const styles = {
     fontWeight: 800,
     cursor: 'pointer',
   },
-    }
+}
