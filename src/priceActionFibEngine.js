@@ -1,18 +1,15 @@
 // priceActionFibEngine.js — Mode 5: PRICE ACTION + FIBONACCI
-// ✅ FINAL VERSION:
-// - TP order enforced
-// - TP2 fallback if fib extreme invalid
-// - Reversal candle body ratio check
-// - buffer atr*0.5
-// - HTF 4h primary only
+// ✅ RELAXED VERSION:
+// - Reversal candle body ratio lowered 0.4 → 0.3
+// - Direction of impulse now considered more flexibly
 
 import { findSwings, calcATR, isFiniteNumber } from './smartMoney.js'
 
 const LTF_KEY = '15m'
 const CONFIRM_KEY = '5m'
-const GOLDEN_POCKET_LOW = 0.618
+const GOLDEN_POCKET_LOW = 0.5   // ✅ Extended from 0.618 to 0.5 (wider zone)
 const GOLDEN_POCKET_HIGH = 0.79
-const TRIGGER_WINDOW = 6
+const TRIGGER_WINDOW = 8         // ✅ Extended from 6 to 8
 
 export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
   const ltf = timeframes[LTF_KEY]
@@ -65,14 +62,15 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
 
     if (impulseIsUp) {
       const inZone = c.low <= entryZoneHigh && c.low >= entryZoneLow
-      const bullishReversalCandle = c.close > c.open && bodyRatio >= 0.4
+      // ✅ RELAXED: body ratio lowered from 0.4 to 0.3
+      const bullishReversalCandle = c.close > c.open && bodyRatio >= 0.3
       if (inZone && bullishReversalCandle) {
         direction = 'LONG'
         break
       }
     } else {
       const inZone = c.high >= entryZoneLow && c.high <= entryZoneHigh
-      const bearishReversalCandle = c.close < c.open && bodyRatio >= 0.4
+      const bearishReversalCandle = c.close < c.open && bodyRatio >= 0.3
       if (inZone && bearishReversalCandle) {
         direction = 'SHORT'
         break
@@ -152,11 +150,11 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
     bias5m,
     pattern:
       direction === 'LONG'
-        ? 'Bullish Golden Pocket Reversal'
-        : 'Bearish Golden Pocket Reversal',
+        ? 'Bullish Fibonacci Retracement'
+        : 'Bearish Fibonacci Retracement',
     quickStats: [
       { label: 'Fib Zone', value: `${entryZoneLow.toFixed(5)} - ${entryZoneHigh.toFixed(5)}` },
-      { label: 'Impulse Range', value: (fibHigh - fibLow).toFixed(5) },
+      { label: 'Impulse', value: (fibHigh - fibLow).toFixed(5) },
       { label: 'Grade', value: 'B' },
     ],
     structure: [
@@ -165,7 +163,7 @@ export function runPriceActionFib({ timeframes, htfBias4h, htfBias1h }) {
     ],
     detail:
       direction === 'LONG'
-        ? 'একটি bullish impulse leg-এর পর দাম 61.8–79% Fibonacci golden pocket-এ retrace করেছিল এবং সেখানে একটি bullish reversal candle তৈরি হয়েছিল।'
-        : 'একটি bearish impulse leg-এর পর দাম 61.8–79% Fibonacci golden pocket-এ retrace করেছিল এবং সেখানে একটি bearish reversal candle তৈরি হয়েছিল।',
+        ? 'একটি bullish impulse leg-এর পর দাম 50-79% Fibonacci zone-এ retrace করে reversal তৈরি করেছে।'
+        : 'একটি bearish impulse leg-এর পর দাম 50-79% Fibonacci zone-এ retrace করে reversal তৈরি করেছে।',
   }
-            }
+    }
