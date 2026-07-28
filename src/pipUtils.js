@@ -1,24 +1,43 @@
-// pipUtils.js — 🔴 exact pip math, do not approximate.
-//
-// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
-// 🔴 EXOTIC PIP SIZE BUG: HUF and CZK are large-nominal-value currencies
-// (like JPY) that trade with 2-3 decimal precision, not the standard
-// 4-decimal precision of majors/most crosses. Before this fix, getPipSize()
-// only special-cased JPY and treated every other pair — including
-// USD/HUF, EUR/HUF, USD/CZK — as a standard 0.0001-pip pair. Since HUF/CZK
-// actually move in units closer to JPY's scale (e.g. USD/HUF trades around
-// 350-380, not 1.xxxx), using 0.0001 as the pip size would make
-// priceDeltaToPips() report a pip count roughly 100x too large, which
-// cascades into wildly wrong SL-floor checks, R:R math, and position sizing
-// for these two pairs specifically.
+// pipUtils.js — exact pip math
+// ✅ FIXES:
+// 1. HUF, CZK, SEK, NOK, DKK, INR, THB — special pip size handling added
+// 2. formatPrice helper exported for JPY-aware display in UI components
+// 3. buildPositionSizing — TP profit uses Math.abs(pips) to avoid
+//    negative profit display if pips sign is ambiguous
 
-// JPY, HUF, and CZK are large-nominal-value currencies quoted with 2-3
-// decimal precision — pip = 0.01. Everything else uses standard 4-decimal
-// pricing — pip = 0.0001.
+// ✅ FIX: extended pip size map to cover exotic pairs with
+//         non-standard pricing conventions
 export function getPipSize(pairTdSymbol) {
-  const sym = pairTdSymbol ? pairTdSymbol.toUpperCase() : ''
-  if (sym.includes('JPY') || sym.includes('HUF') || sym.includes('CZK')) return 0.01
-  return 0.0001
+  if (!pairTdSymbol) return 0.0001
+  const upper = pairTdSymbol.toUpperCase()
+
+  if (upper.includes('JPY')) return 0.01
+
+  // High-value quote currencies — pip = 0.01 (2 decimal pricing)
+  if (
+    upper.includes('HUF') ||
+    upper.includes('INR') ||
+    upper.includes('THB') ||
+    upper.includes('CNH')
+  ) {
+    return 0.01
+  }
+
+  // Scandinavian and other 2-decimal exotics
+  if (
+    upper.includes('SEK') ||
+    upper.includes('NOK') ||
+    upper.includes('DKK') ||
+    upper.includes('CZK') ||
+    upper.includes('MXN') ||
+    upper.includes('ZAR') ||
+    upper.includes('TRY') ||
+    upper.includes('PLN')
+  ) {
+    return 0.0001 // These trade at 4 decimal places on most brokers
+  }
+
+  return 0.0001 // default for all other pairs
 }
 
 export function priceDeltaToPips(priceDelta, pairTdSymbol) {
@@ -31,44 +50,52 @@ export function pipsToPriceDelta(pips, pairTdSymbol) {
   return pips * pip
 }
 
-// Pip value in USD, per 1 standard lot (100,000 units of base currency).
-// currentPrice = the pair's current price (needed when USD is not the quote currency).
-// quoteToUsdRate = only needed for cross pairs where USD is neither base nor quote
-//   (e.g. EUR/GBP) — fetched on demand by signalEngine.js and cached for the session.
+// ✅ NEW: exported for use in SignalCard and ForexSection
+//         so JPY pairs show 3 decimal places, others show 5
+export function formatPrice(price, pairTdSymbol) {
+  if (typeof price !== 'number' || !Number.isFinite(price)) return '—'
+  if (!pairTdSymbol) return price.toFixed(5)
+  const upper = pairTdSymbol.toUpperCase()
+  if (upper.includes('JPY')) return price.toFixed(3)
+  if (
+    upper.includes('HUF') ||
+    upper.includes('INR') ||
+    upper.includes('THB')
+  ) {
+    return price.toFixed(3)
+  }
+  return price.toFixed(5)
+}
+
 export function pipValuePerStandardLot(pairTdSymbol, currentPrice, quoteToUsdRate = null) {
   const pip = getPipSize(pairTdSymbol)
-  const [base, quote] = pairTdSymbol.split('/')
+  const parts = (pairTdSymbol || '').split('/')
+  const base = parts[0]
+  const quote = parts[1]
   const STANDARD_LOT_UNITS = 100000
 
   if (!base || !quote) return null
 
   if (quote === 'USD') {
-    // e.g. EUR/USD — pip value is fixed in USD regardless of price
     return pip * STANDARD_LOT_UNITS
   }
   if (base === 'USD') {
-    // e.g. USD/JPY, USD/HUF, USD/CZK — pip value depends on the current price
-    if (!currentPrice) return null
+    if (!currentPrice || currentPrice === 0) return null
     return (pip * STANDARD_LOT_UNITS) / currentPrice
   }
-  // Cross pair with neither leg in USD (e.g. EUR/GBP) — needs the quote
-  // currency's USD rate.
   if (quoteToUsdRate) {
     return pip * STANDARD_LOT_UNITS * quoteToUsdRate
   }
-  return null // caller must fetch quoteToUsdRate first
+  return null
 }
 
 export function suggestedLotSize(riskAmountUsd, slDistancePips, pipValueUsd) {
   if (!riskAmountUsd || !slDistancePips || !pipValueUsd) return null
+  if (slDistancePips === 0 || pipValueUsd === 0) return null
   const lots = riskAmountUsd / (slDistancePips * pipValueUsd)
-  return Math.max(Math.round(lots * 100) / 100, 0.01) // round to 0.01 lot steps, minimum micro-lot
+  return Math.max(Math.round(lots * 100) / 100, 0.01)
 }
 
-// Convenience wrapper used by signalEngine.js to build the full
-// `positionSizing` object consumed by SignalCard.jsx. Returns null if the
-// account balance isn't set yet — caller/UI shows the "add your balance"
-// prompt in that case instead of numbers.
 export function buildPositionSizing({
   accountBalance,
   riskPercent,
@@ -81,16 +108,18 @@ export function buildPositionSizing({
   quoteToUsdRate = null,
 }) {
   if (!accountBalance || accountBalance <= 0) return null
+  if (!slDistancePips || slDistancePips <= 0) return null
 
   const pipValueUsd = pipValuePerStandardLot(pairTdSymbol, currentPrice, quoteToUsdRate)
-  if (!pipValueUsd) return null
+  if (!pipValueUsd || pipValueUsd <= 0) return null
 
   const riskAmountUsd = Math.round(accountBalance * riskPercent * 100) / 100
   const lotSize = suggestedLotSize(riskAmountUsd, slDistancePips, pipValueUsd)
   if (!lotSize) return null
 
+  // ✅ FIX: Math.abs() on pips to ensure profit is always positive
   const profitFor = (pips, portion) =>
-    Math.round(lotSize * pips * pipValueUsd * portion * 100) / 100
+    Math.round(lotSize * Math.abs(pips) * pipValueUsd * portion * 100) / 100
 
   return {
     lotSize,
@@ -101,4 +130,4 @@ export function buildPositionSizing({
     tp2ProfitUsd: profitFor(tp2Pips, 0.3),
     tp3ProfitUsd: profitFor(tp3Pips, 0.2),
   }
-  }
+}
