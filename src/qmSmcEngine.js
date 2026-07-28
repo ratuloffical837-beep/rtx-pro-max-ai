@@ -1,10 +1,8 @@
 // qmSmcEngine.js — Mode 4: QM + SMC
-// ✅ FINAL VERSION:
-// - TP order enforced
-// - TP2 fallback if swing extreme invalid
-// - neckline null-safe
-// - buffer atr*0.5
-// - HTF 4h primary only
+// ✅ RELAXED VERSION:
+// - OrderBlock/FVG confluence is now BONUS, not required
+// - Only QM pattern + HTF agreement needed for signal
+// - Strength reflects confluence count
 
 import {
   findSwings,
@@ -70,7 +68,8 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     direction === 'LONG' ? g.type === 'bullish' : g.type === 'bearish'
   )
 
-  if (!orderBlock && !relevantFvg) return { noSignal: true }
+  // ✅ RELAXED: OB/FVG is now bonus, not required
+  // Signal still generates without them, just weaker
 
   const entry = lastClose
   const buffer = atr * 0.5
@@ -123,9 +122,12 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
       ? neckline?.price?.toFixed(5) ?? 'N/A'
       : necklineBear?.price?.toFixed(5) ?? 'N/A'
 
+  const confluenceCount = (orderBlock ? 1 : 0) + (relevantFvg ? 1 : 0)
+  const strength = confluenceCount === 2 ? 'Strong' : confluenceCount === 1 ? 'Moderate' : 'Weak'
+
   return {
     direction,
-    strength: orderBlock && relevantFvg ? 'Strong' : 'Moderate',
+    strength,
     entry,
     sl,
     tp1,
@@ -135,8 +137,8 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     bias5m,
     pattern:
       direction === 'LONG'
-        ? 'Bullish Quasimodo + SMC Confluence'
-        : 'Bearish Quasimodo + SMC Confluence',
+        ? 'Bullish Quasimodo Pattern'
+        : 'Bearish Quasimodo Pattern',
     quickStats: [
       { label: 'Neckline', value: necklineDisplay },
       { label: 'Order Block', value: orderBlock ? 'Found' : 'None' },
@@ -144,14 +146,11 @@ export function runQmSmc({ timeframes, htfBias4h, htfBias1h }) {
     ],
     structure: [
       { label: 'Head Level', value: headLevel.toFixed(5) },
-      {
-        label: 'Confluence Score',
-        value: `${(orderBlock ? 1 : 0) + (relevantFvg ? 1 : 0)}/2`,
-      },
+      { label: 'Confluence', value: `${confluenceCount}/2` },
     ],
     detail:
       direction === 'LONG'
-        ? 'দাম একটি lower-low (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing high (neckline) ভেঙে বাইরে চলে এসেছে — SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে।'
-        : 'দাম একটি higher-high (Quasimodo head) তৈরি করে একটি লিকুইডিটি গ্র্যাব করেছিল, তারপর মাঝের swing low (neckline) ভেঙে নিচে চলে এসেছে — SMC Order Block/FVG কনফ্লুয়েন্স মিলেছে।',
+        ? 'Quasimodo pattern তৈরি হয়েছে — lower-low দিয়ে লিকুইডিটি গ্র্যাব করে neckline ভেঙে বাইরে চলে এসেছে।'
+        : 'Quasimodo pattern তৈরি হয়েছে — higher-high দিয়ে লিকুইডিটি গ্র্যাব করে neckline ভেঙে নিচে চলে এসেছে।',
   }
-                    }
+    }
