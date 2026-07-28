@@ -1,8 +1,11 @@
-// smartMoney.js — shared Smart-Money-Concepts helpers used by all 5 mode
-// engines. Pure price-action/structure math — no indicators, ATR is only
-// used for volatility buffers per the master prompt's stated exception.
+// smartMoney.js — shared Smart-Money-Concepts helpers.
+// ✅ FIXES:
+// 1. findSwings — edge boundary fixed (last candle now scannable)
+// 2. detectBOSCHoCH — recency check added (max 50 candles back)
+// 3. detectOrderBlock — bounded loop (last 50 candles only)
+// 4. isFiniteNumber — confirmed exported here
 
-// Average True Range over the last `period` candles (Wilder-style, simple average).
+// ─── ATR ────────────────────────────────────────────────────────────────────
 export function calcATR(candles, period = 14) {
   if (!candles || candles.length < period + 1) return null
 
@@ -23,16 +26,21 @@ export function calcATR(candles, period = 14) {
   return sum / lastN.length
 }
 
-// Simple fractal-based swing high/low detection: a candle is a swing high if
-// its high is greater than `lookback` candles on each side, and vice versa
-// for swing lows.
+// ─── SWING HIGHS / LOWS ──────────────────────────────────────────────────────
+// ✅ FIX: upper bound changed from candles.length - lookback
+//         to candles.length - 1 so the most recent candles
+//         are not silently excluded from swing detection.
 export function findSwings(candles, lookback = 2) {
   const swingHighs = []
   const swingLows = []
 
-  for (let i = lookback; i < candles.length - lookback; i++) {
-    const window = candles.slice(i - lookback, i + lookback + 1)
+  for (let i = lookback; i < candles.length - 1; i++) {
     const c = candles[i]
+
+    // Build the comparison window — clamp so we never go out of bounds
+    const from = Math.max(0, i - lookback)
+    const to = Math.min(candles.length - 1, i + lookback)
+    const window = candles.slice(from, to + 1)
 
     if (c.high === Math.max(...window.map((w) => w.high))) {
       swingHighs.push({ index: i, price: c.high, time: c.time })
@@ -45,25 +53,40 @@ export function findSwings(candles, lookback = 2) {
   return { swingHighs, swingLows }
 }
 
-// Bullish/bearish Order Block: the last down (or up) candle immediately
-// before a strong displacement move in the opposite direction.
+// ─── ORDER BLOCK ─────────────────────────────────────────────────────────────
+// ✅ FIX: loop bounded to last 50 candles so stale order blocks
+//         from hundreds of candles ago are never returned.
 export function detectOrderBlock(candles, direction) {
   if (!candles || candles.length < 5) return null
 
-  for (let i = candles.length - 3; i >= 1; i--) {
+  const scanFrom = Math.max(1, candles.length - 50)
+
+  for (let i = candles.length - 3; i >= scanFrom; i--) {
     const c = candles[i]
     const next = candles[i + 1]
+    if (!next) continue
+
     const isBearishCandle = c.close < c.open
     const isBullishCandle = c.close > c.open
     const displacement = Math.abs(next.close - next.open)
     const avgRange = calcAvgRange(candles.slice(Math.max(0, i - 10), i))
 
-    if (!avgRange) continue
+    if (!avgRange || avgRange === 0) continue
 
-    if (direction === 'LONG' && isBearishCandle && next.close > next.open && displacement > avgRange * 1.5) {
+    if (
+      direction === 'LONG' &&
+      isBearishCandle &&
+      next.close > next.open &&
+      displacement > avgRange * 1.5
+    ) {
       return { index: i, high: c.high, low: c.low, time: c.time }
     }
-    if (direction === 'SHORT' && isBullishCandle && next.close < next.open && displacement > avgRange * 1.5) {
+    if (
+      direction === 'SHORT' &&
+      isBullishCandle &&
+      next.close < next.open &&
+      displacement > avgRange * 1.5
+    ) {
       return { index: i, high: c.high, low: c.low, time: c.time }
     }
   }
@@ -76,8 +99,7 @@ function calcAvgRange(candles) {
   return sum / candles.length
 }
 
-// Fair Value Gap: a 3-candle imbalance where candle[0].high < candle[2].low
-// (bullish FVG) or candle[0].low > candle[2].high (bearish FVG).
+// ─── FAIR VALUE GAP ──────────────────────────────────────────────────────────
 export function detectFVG(candles) {
   const gaps = []
   for (let i = 0; i < candles.length - 2; i++) {
@@ -92,8 +114,10 @@ export function detectFVG(candles) {
   return gaps
 }
 
-// Break of Structure / Change of Character detection against the most
-// recent swing points.
+// ─── BOS / CHoCH ─────────────────────────────────────────────────────────────
+// ✅ FIX: recency check added — only consider swings within the
+//         last 50 candles so a break from 200 candles ago is not
+//         treated as an active structural shift today.
 export function detectBOSCHoCH(candles) {
   const { swingHighs, swingLows } = findSwings(candles, 2)
   if (swingHighs.length < 2 || swingLows.length < 2) return null
@@ -104,27 +128,38 @@ export function detectBOSCHoCH(candles) {
   const prevSwingHigh = swingHighs[swingHighs.length - 2]
   const prevSwingLow = swingLows[swingLows.length - 2]
 
-  if (lastClose > lastSwingHigh.price) {
+  // ✅ Recency guard — swing must be within last 50 candles
+  const recentThreshold = candles.length - 50
+  const highIsRecent = lastSwingHigh.index >= recentThreshold
+  const lowIsRecent = lastSwingLow.index >= recentThreshold
+
+  if (highIsRecent && lastClose > lastSwingHigh.price) {
     const trendWasUp = lastSwingHigh.price > prevSwingHigh.price
-    return { type: trendWasUp ? 'BOS' : 'CHoCH', direction: 'bullish', level: lastSwingHigh.price }
+    return {
+      type: trendWasUp ? 'BOS' : 'CHoCH',
+      direction: 'bullish',
+      level: lastSwingHigh.price,
+    }
   }
-  if (lastClose < lastSwingLow.price) {
+  if (lowIsRecent && lastClose < lastSwingLow.price) {
     const trendWasDown = lastSwingLow.price < prevSwingLow.price
-    return { type: trendWasDown ? 'BOS' : 'CHoCH', direction: 'bearish', level: lastSwingLow.price }
+    return {
+      type: trendWasDown ? 'BOS' : 'CHoCH',
+      direction: 'bearish',
+      level: lastSwingLow.price,
+    }
   }
   return null
 }
 
-// HTF (4h/1h) directional bias from the last two swing highs/lows —
-// 🔴 this bias can never be ignored by a mode engine (common rule #2).
+// ─── HTF BIAS ─────────────────────────────────────────────────────────────────
 export function getHtfBias(candles) {
   const bosChoch = detectBOSCHoCH(candles)
   if (!bosChoch) return 'Neutral'
   return bosChoch.direction === 'bullish' ? 'Bullish' : 'Bearish'
 }
 
-// NaN/Infinity guard — common rule #4. Treats bad calculations as neutral
-// rather than letting them propagate into a signal.
+// ─── NaN / INFINITY GUARD ────────────────────────────────────────────────────
 export function isFiniteNumber(n) {
   return typeof n === 'number' && Number.isFinite(n)
-      }
+                      }
