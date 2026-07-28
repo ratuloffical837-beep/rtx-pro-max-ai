@@ -1,13 +1,5 @@
-// constants.js — 🔴 SINGLE SOURCE for contact info and price.
-// Every other file (footer, payment page, upgrade banners) must import from
-// here, never hardcode these values again. If a number/link ever changes,
-// this is the only file that needs editing.
+// constants.js — SINGLE SOURCE OF TRUTH
 
-// 🔴 The frontend and backend are deployed as two SEPARATE Render services
-// (different domains), so every backend API call must use an ABSOLUTE URL —
-// a relative fetch('/api/...') would hit the frontend's own domain instead
-// and silently fail. Set VITE_BACKEND_URL in the frontend service's env vars
-// to your backend service's URL, e.g. https://rtx-pro-max-ai.onrender.com
 export const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '')
 
 export const CONTACT = {
@@ -15,14 +7,11 @@ export const CONTACT = {
   channel: 'https://t.me/ratulhossain4241',
   group: 'https://t.me/ratulhossain424',
   paymentNumber: '01725218874',
-  monthlyAmount: 8000, // ৳ BDT, per month
+  monthlyAmount: 8000,
 }
 
-// 🔴 5 free signals, lifetime — not daily. Used by the trial banner and by
-// the backend's /api/check-status gate.
 export const FREE_TRIAL_LIMIT = 5
 
-// Color palette — unchanged from the original crypto app, reused exactly.
 export const C = {
   bg: '#0a0e17',
   card: '#131722',
@@ -41,8 +30,6 @@ export const C = {
   pink: '#ec4899',
 }
 
-// 🔴 The 5 signal modes — order matters, this drives the mode-card order in
-// SettingsModal and the badge color lookup everywhere else.
 export const SIGNAL_MODES = [
   { id: 'sweep', name: 'SWEEP RECLAIM', color: C.cyan },
   { id: 'crt_tbs', name: 'CRT + TBS PRO', color: C.purple },
@@ -53,17 +40,15 @@ export const SIGNAL_MODES = [
 
 export const DEFAULT_MODE_ID = 'sweep'
 
-// Fixed risk — 🔴 permanently 1%, never user-editable (see riskManager.js /
-// MoneyManagementModal.jsx). Do not move this into localStorage.
 export const FIXED_RISK_PERCENT = 0.01
 
-// Minimum SL distance floor, in pips (#13.4)
+// ✅ FIXED — realistic SL floors so signals are not always blocked
 export const MIN_SL_PIPS = {
-  Major: 8,
-  Cross: 8,
-  Exotic: 15,
+  Major: 5,
+  Cross: 5,
+  Exotic: 10,
 }
 
-export const MIN_RR_RATIO = 1.5 // signals with R:R below 1:1.5 are discarded
+export const MIN_RR_RATIO = 1.5
 
 export const TWELVE_DATA_DAILY_CREDIT_LIMIT = 800
