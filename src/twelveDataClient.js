@@ -1,10 +1,12 @@
-// twelveDataClient.js — 🔴 runs entirely in the browser. The backend never
-// touches Twelve Data or the user's API key at all.
+// twelveDataClient.js — runs entirely in the browser
+// ✅ FINAL VERSION:
+// - Session cache (60s TTL) — reduces API calls significantly
+// - Retry logic for transient failures (1 retry with backoff)
+// - Better error surfacing
+// - HTF failures no longer kill the whole signal (returns partial data)
 
 const BASE_URL = 'https://api.twelvedata.com'
 
-// 🔴 Exact interval strings Twelve Data expects — do not invent shorthand
-// like "4H" or "15m".
 const INTERVAL_MAP = {
   '4h': '4h',
   '1h': '1h',
@@ -13,6 +15,11 @@ const INTERVAL_MAP = {
 }
 
 const API_KEY_STORAGE_KEY = 'rtx_td_api_key'
+
+// ✅ Session cache — key: `symbol|tfKey`, value: { data, ts }
+const _candleCache = new Map()
+const _priceCache = new Map()
+const CACHE_TTL_MS = 60_000 // 60 seconds
 
 export function getApiKey() {
   try {
@@ -34,7 +41,7 @@ export function saveApiKey(key) {
 }
 
 function getTodayString() {
-  return new Date().toISOString().slice(0, 10) // YYYY-MM-DD, local calendar day is fine here
+  return new Date().toISOString().slice(0, 10)
 }
 
 function incrementCreditUsage(n) {
@@ -64,6 +71,34 @@ export function getCreditUsageToday() {
   }
 }
 
+// ✅ Cache lookup helper
+function getCached(cache, key) {
+  const hit = cache.get(key)
+  if (hit && Date.now() - hit.ts < CACHE_TTL_MS) {
+    return hit.data
+  }
+  return null
+}
+
+function setCache(cache, key, data) {
+  cache.set(key, { data, ts: Date.now() })
+}
+
+// ✅ Fetch with 1 retry on network failure
+async function fetchWithRetry(url, retries = 1) {
+  try {
+    const res = await fetch(url)
+    return await res.json()
+  } catch (e) {
+    if (retries > 0) {
+      console.warn('twelveDataClient: fetch failed, retrying in 500ms...', e.message)
+      await new Promise((r) => setTimeout(r, 500))
+      return fetchWithRetry(url, retries - 1)
+    }
+    throw e
+  }
+}
+
 export async function fetchCandles(tdSymbol, tfKey, outputsize = 100) {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('API_KEY_MISSING')
@@ -71,28 +106,28 @@ export async function fetchCandles(tdSymbol, tfKey, outputsize = 100) {
   const interval = INTERVAL_MAP[tfKey]
   if (!interval) throw new Error(`Unknown timeframe key: ${tfKey}`)
 
+  const cacheKey = `${tdSymbol}|${tfKey}`
+  const cached = getCached(_candleCache, cacheKey)
+  if (cached) {
+    console.log(`[twelveDataClient] CACHE HIT: ${cacheKey}`)
+    return cached
+  }
+
   const url = `${BASE_URL}/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${apiKey}`
 
-  const res = await fetch(url)
-  const data = await res.json()
+  const data = await fetchWithRetry(url, 1)
 
   if (data.status === 'error') {
-    // Twelve Data's own error payloads include rate-limit / exhausted-credit
-    // messages — surface those verbatim so ForexSection's error branching
-    // (which regex-matches on "credit") can catch them.
     throw new Error(data.message || 'TWELVE_DATA_ERROR')
   }
   if (!data.values || !Array.isArray(data.values)) {
     throw new Error('TWELVE_DATA_ERROR: no candle data returned')
   }
 
-  incrementCreditUsage(1) // one time_series call = 1 credit
+  incrementCreditUsage(1)
 
-  // 🔴🔴 Twelve Data returns candles NEWEST-FIRST. This is the OPPOSITE of
-  // Binance (which returns oldest-first). Every mode engine expects
-  // oldest→newest, so this MUST be reversed here, once, centrally — do not
-  // rely on each mode engine to remember to reverse it.
-  return data.values
+  // Twelve Data returns newest-first → reverse to oldest-first
+  const parsed = data.values
     .slice()
     .reverse()
     .map((c) => ({
@@ -102,8 +137,14 @@ export async function fetchCandles(tdSymbol, tfKey, outputsize = 100) {
       low: parseFloat(c.low),
       close: parseFloat(c.close),
     }))
+
+  setCache(_candleCache, cacheKey, parsed)
+  return parsed
 }
 
+// ✅ Fetch all 4 timeframes — partial success is OK
+// If HTF (4h/1h) fails but 15m succeeds, we return what we have
+// and let signalEngine decide how to proceed
 export async function fetchAllTimeframes(tdSymbol) {
   const keys = ['4h', '1h', '15m', '5m']
   const results = await Promise.allSettled(keys.map((k) => fetchCandles(tdSymbol, k)))
@@ -114,18 +155,22 @@ export async function fetchAllTimeframes(tdSymbol) {
 
   keys.forEach((k, i) => {
     if (results[i].status === 'fulfilled') {
-      // Discard any timeframe with fewer than 30 candles.
       out[k] = results[i].value.length >= 30 ? results[i].value : null
       if (out[k]) anyFulfilled = true
     } else {
       out[k] = null
       lastError = results[i].reason
+      console.warn(`[twelveDataClient] ${tdSymbol} ${k} failed:`, lastError?.message)
     }
   })
 
-  // If every single timeframe failed (e.g. bad/exhausted key), surface the
-  // underlying error instead of silently returning an all-null object.
+  // Only throw if EVERYTHING failed (including 15m — the critical one)
   if (!anyFulfilled && lastError) throw lastError
+
+  // If 15m specifically failed, that's fatal for signal generation
+  if (!out['15m']) {
+    throw new Error('TWELVE_DATA_ERROR: 15m candles unavailable (required for signal)')
+  }
 
   return out
 }
@@ -134,12 +179,23 @@ export async function fetchLivePrice(tdSymbol) {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('API_KEY_MISSING')
 
+  const cached = getCached(_priceCache, tdSymbol)
+  if (cached !== null) return cached
+
   const url = `${BASE_URL}/price?symbol=${encodeURIComponent(tdSymbol)}&apikey=${apiKey}`
-  const res = await fetch(url)
-  const data = await res.json()
+  const data = await fetchWithRetry(url, 1)
 
   if (data.status === 'error') throw new Error(data.message || 'TWELVE_DATA_ERROR')
 
   incrementCreditUsage(1)
-  return parseFloat(data.price)
+  const price = parseFloat(data.price)
+  setCache(_priceCache, tdSymbol, price)
+  return price
+}
+
+// ✅ Clear cache manually (useful for pull-to-refresh)
+export function clearCache() {
+  _candleCache.clear()
+  _priceCache.clear()
+  console.log('[twelveDataClient] Cache cleared')
 }
