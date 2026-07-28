@@ -1,9 +1,10 @@
 // signalEngine.js — mode router + riskManager gatekeeper
-// ✅ FIXES:
-// 1. HTF check — empty array check added (length > 0 required)
-// 2. market.td null guard added
-// 3. slPips = 0 explicit debug log
-// 4. Cross pair rate handling retained and improved
+// ✅ FINAL VERSION:
+// - Final TP order validation (safety net across all 5 engines)
+// - Empty array HTF check
+// - market.td null guard
+// - slPips = 0 explicit debug log
+// - Better error messages for user
 
 import { SIGNAL_MODES, FIXED_RISK_PERCENT } from './constants.js'
 import { priceDeltaToPips, buildPositionSizing } from './pipUtils.js'
@@ -35,12 +36,12 @@ async function getQuoteToUsdRate(quoteCurrency) {
   try {
     rate = await fetchLivePrice(`${quoteCurrency}/USD`)
   } catch (e) {
-    console.error(`signalEngine: ${quoteCurrency}/USD fetch failed, trying inverse:`, e.message)
+    console.error(`signalEngine: ${quoteCurrency}/USD fetch failed:`, e.message)
     try {
       const inverse = await fetchLivePrice(`USD/${quoteCurrency}`)
       rate = inverse ? 1 / inverse : null
     } catch (e2) {
-      console.error(`signalEngine: USD/${quoteCurrency} fallback also failed:`, e2.message)
+      console.error(`signalEngine: USD/${quoteCurrency} fallback failed:`, e2.message)
       rate = null
     }
   }
@@ -56,32 +57,40 @@ export async function generateSignal({ modeId, market, timeframes }) {
   const runner = MODE_RUNNERS[modeId]
   if (!runner) throw new Error(`Unknown signal mode: ${modeId}`)
 
-  // ✅ FIX: null guard for market.td
   if (!market || !market.td || !market.td.includes('/')) {
-    return { noSignal: true, debugReason: 'Invalid market object — td symbol missing or malformed.' }
+    return {
+      noSignal: true,
+      debugReason: 'Invalid market object — td symbol missing or malformed.',
+    }
   }
 
   const modeMeta = SIGNAL_MODES.find((m) => m.id === modeId)
   const debugTag = `[signalEngine:${modeId}:${market?.name}]`
 
-  // ✅ FIX: check both existence AND length — empty array is truthy but useless
   const has4h = Array.isArray(timeframes['4h']) && timeframes['4h'].length >= 30
   const has1h = Array.isArray(timeframes['1h']) && timeframes['1h'].length >= 30
+  const has15m = Array.isArray(timeframes['15m']) && timeframes['15m'].length >= 30
 
   const htfBias4h = has4h ? getHtfBias(timeframes['4h']) : 'Neutral'
   const htfBias1h = has1h ? getHtfBias(timeframes['1h']) : 'Neutral'
 
-  if (!has4h || !has1h) {
-    const reason =
-      'HTF ডেটা মিসিং: 4h বা 1h টাইমফ্রেমে যথেষ্ট ক্যান্ডেল (৩০+) পাওয়া যায়নি।'
+  // 15m is the primary — signal cannot generate without it
+  if (!has15m) {
+    const reason = '15m টাইমফ্রেমে যথেষ্ট ক্যান্ডেল (৩০+) পাওয়া যায়নি — এন্ট্রি ক্যালকুলেট করা যাচ্ছে না।'
     console.log(`${debugTag} noSignal:`, reason)
     return { noSignal: true, debugReason: reason }
+  }
+
+  // If BOTH HTF timeframes fail, degrade gracefully with Neutral bias
+  // (engines already treat Neutral as "no conflict, no confirmation")
+  if (!has4h && !has1h) {
+    console.log(`${debugTag} ⚠️ HTF data missing — proceeding with Neutral bias`)
   }
 
   const raw = runner({ timeframes, htfBias4h, htfBias1h })
 
   if (!raw || raw.noSignal) {
-    const reason = `"${modeMeta?.name || modeId}" মোডের প্যাটার্ন কন্ডিশন এই মুহূর্তে মেলেনি।`
+    const reason = `"${modeMeta?.name || modeId}" মোডের প্যাটার্ন এই মুহূর্তে মেলেনি।`
     console.log(`${debugTag} noSignal:`, reason)
     return { noSignal: true, debugReason: reason }
   }
@@ -93,12 +102,36 @@ export async function generateSignal({ modeId, market, timeframes }) {
     return { noSignal: true, debugReason: reason }
   }
 
+  // ✅ FINAL TP ORDER GATE (safety net)
+  if (raw.direction === 'LONG') {
+    if (!(raw.tp1 < raw.tp2 && raw.tp2 < raw.tp3 && raw.tp1 > raw.entry)) {
+      const reason = `TP order invalid for LONG: entry=${raw.entry.toFixed(5)}, tp1=${raw.tp1.toFixed(5)}, tp2=${raw.tp2.toFixed(5)}, tp3=${raw.tp3.toFixed(5)}`
+      console.log(`${debugTag} noSignal:`, reason)
+      return { noSignal: true, debugReason: reason }
+    }
+    if (raw.sl >= raw.entry) {
+      const reason = `SL wrong side for LONG: sl=${raw.sl.toFixed(5)}, entry=${raw.entry.toFixed(5)}`
+      console.log(`${debugTag} noSignal:`, reason)
+      return { noSignal: true, debugReason: reason }
+    }
+  } else if (raw.direction === 'SHORT') {
+    if (!(raw.tp1 > raw.tp2 && raw.tp2 > raw.tp3 && raw.tp1 < raw.entry)) {
+      const reason = `TP order invalid for SHORT: entry=${raw.entry.toFixed(5)}, tp1=${raw.tp1.toFixed(5)}, tp2=${raw.tp2.toFixed(5)}, tp3=${raw.tp3.toFixed(5)}`
+      console.log(`${debugTag} noSignal:`, reason)
+      return { noSignal: true, debugReason: reason }
+    }
+    if (raw.sl <= raw.entry) {
+      const reason = `SL wrong side for SHORT: sl=${raw.sl.toFixed(5)}, entry=${raw.entry.toFixed(5)}`
+      console.log(`${debugTag} noSignal:`, reason)
+      return { noSignal: true, debugReason: reason }
+    }
+  }
+
   const slPips = priceDeltaToPips(Math.abs(raw.entry - raw.sl), market.td)
   const tp1Pips = priceDeltaToPips(Math.abs(raw.tp1 - raw.entry), market.td)
   const tp2Pips = priceDeltaToPips(Math.abs(raw.tp2 - raw.entry), market.td)
   const tp3Pips = priceDeltaToPips(Math.abs(raw.tp3 - raw.entry), market.td)
 
-  // ✅ FIX: explicit log when slPips is 0
   if (slPips === 0) {
     const reason = 'SL distance is 0 pips — entry and SL are identical.'
     console.log(`${debugTag} noSignal:`, reason)
@@ -138,7 +171,7 @@ export async function generateSignal({ modeId, market, timeframes }) {
     try {
       quoteToUsdRate = await getQuoteToUsdRate(quoteCurrency)
     } catch (e) {
-      console.error('signalEngine: quoteToUsdRate resolution failed (non-fatal):', e.message)
+      console.error('signalEngine: quoteToUsdRate failed (non-fatal):', e.message)
     }
   }
 
@@ -163,6 +196,9 @@ export async function generateSignal({ modeId, market, timeframes }) {
     direction: raw.direction,
     rr: rr.toFixed(2),
     slPips: slPips.toFixed(1),
+    tp1Pips: tp1Pips.toFixed(1),
+    tp2Pips: tp2Pips.toFixed(1),
+    tp3Pips: tp3Pips.toFixed(1),
   })
 
   return {
@@ -191,4 +227,4 @@ export async function generateSignal({ modeId, market, timeframes }) {
     detail: raw.detail || null,
     positionSizing,
   }
-      }
+  }
