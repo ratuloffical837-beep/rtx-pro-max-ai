@@ -1,39 +1,13 @@
-// SignalCard.jsx — displays one generated signal. Pip-based, includes the
-// Position Sizing box and the Won/Lost drawdown-counter buttons.
-// 🔴 No leverage-suggestion row in the TP/SL box — that context lives only in
-// the Position Sizing box below it.
-// 🔴 Disclaimer line at the bottom is mandatory and must never be removed.
-//
-// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
-// 🔴 Added an explicit "এন্ট্রি টাইমফ্রেম: 15m" badge. Every mode engine
-// (sweepReclaim.js, crtTbsEngine.js, wyckoffIctEngine.js, qmSmcEngine.js,
-// priceActionFibEngine.js) always analyzes the 15m candles to build entry/
-// SL/TP — 4h/1h are HTF bias confirmation only, 5m is an informational
-// reading only. Before this label existed, the chart above (which defaulted
-// to a 1h view) made it look like signals came from 1h, causing real
-// confusion about which timeframe to actually open the trade on.
+// SignalCard.jsx — displays one generated signal
+// ✅ FINAL VERSION:
+// - SL pips shown with "-" prefix (not "+" which is misleading)
+// - JPY pairs use 3 decimal places, others 5
+// - Profit line spacing fixed (template literal)
+// - Uses formatPrice from pipUtils for consistent display
 
 import React, { useState } from 'react'
 import { C } from './constants.js'
-
-// Expected `signal` shape (produced by signalEngine.js):
-// {
-//   direction: 'LONG' | 'SHORT',
-//   modeName, modeColor, strength: 'Strong'|'Moderate'|'Weak',
-//   pair: { name, cat, td },
-//   entry: number,
-//   tp1: { price, pips }, tp2: { price, pips }, tp3: { price, pips },
-//   sl: { price, pips },
-//   rr: number,
-//   blocked: boolean, blockReason: string | null,
-//   quickStats: [{ label, value }] (length 3),
-//   structure: [{ label, value }],
-//   mtfBias: { '4h': 'Bullish'|'Bearish'|'Neutral', '1h': ..., '15m': ..., '5m': ... },
-//   pattern: string,
-//   detail: string,
-//   positionSizing: { lotSize, riskAmountUsd, riskPercent, potentialLossUsd,
-//                      tp1ProfitUsd, tp2ProfitUsd, tp3ProfitUsd } | null
-// }
+import { formatPrice } from './pipUtils.js'
 
 export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
   const [detailOpen, setDetailOpen] = useState(false)
@@ -41,10 +15,10 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
   if (!signal) return null
 
   const dirColor = signal.direction === 'LONG' ? C.green : C.red
+  const pairSymbol = signal.pair?.td || signal.pair?.name
 
   return (
     <div style={styles.card}>
-      {/* Direction + mode + strength */}
       <div style={styles.headerRow}>
         <span style={{ ...styles.dirBadge, background: `${dirColor}22`, color: dirColor, borderColor: dirColor }}>
           {signal.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}
@@ -57,24 +31,20 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
 
       <div style={styles.pairName}>{signal.pair?.name}</div>
 
-      {/* 🔴 FIX: explicit entry timeframe — removes ambiguity about which
-          chart timeframe this signal's levels were actually calculated from. */}
       <div style={styles.timeframeBadge}>📊 এন্ট্রি টাইমফ্রেম: 15m</div>
 
-      {/* TP/SL box */}
       <div style={styles.tpslBox}>
         <div style={styles.entryRow}>
           <span style={styles.entryLabel}>Entry</span>
-          <span style={styles.entryValue}>{formatPrice(signal.entry)}</span>
+          <span style={styles.entryValue}>{formatPrice(signal.entry, pairSymbol)}</span>
         </div>
-        <TpRow label="🎯 TP1 (50%)" data={signal.tp1} color={C.green} />
-        <TpRow label="🎯 TP2 (30%)" data={signal.tp2} color={C.green} />
-        <TpRow label="🎯 TP3 (20%)" data={signal.tp3} color={C.green} />
-        <TpRow label="🛑 STOP LOSS" data={signal.sl} color={C.red} />
+        <TpRow label="🎯 TP1 (50%)" data={signal.tp1} color={C.green} pairSymbol={pairSymbol} />
+        <TpRow label="🎯 TP2 (30%)" data={signal.tp2} color={C.green} pairSymbol={pairSymbol} />
+        <TpRow label="🎯 TP3 (20%)" data={signal.tp3} color={C.green} pairSymbol={pairSymbol} />
+        <TpRow label="🛑 STOP LOSS" data={signal.sl} color={C.red} pairSymbol={pairSymbol} isSL />
         <div style={styles.rrBox}>⚖️ R:R = 1:{signal.rr?.toFixed(2)}</div>
       </div>
 
-      {/* Position sizing */}
       {signal.positionSizing ? (
         <div style={styles.sizingBox}>
           <div style={styles.sizingTitle}>📐 Position Sizing</div>
@@ -84,12 +54,10 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
             value={`$${signal.positionSizing.riskAmountUsd} (${(signal.positionSizing.riskPercent * 100).toFixed(0)}%)`}
           />
           <div style={styles.lossLine}>
-            ❌ If SL Hits: -${signal.positionSizing.potentialLossUsd} — পরের ট্রেডেও একই ১% ঝুঁকি
-            রাখুন, সাইজ বাড়াবেন না
+            {`❌ If SL Hits: -$${signal.positionSizing.potentialLossUsd} — পরের ট্রেডেও একই ১% ঝুঁকি রাখুন, সাইজ বাড়াবেন না`}
           </div>
           <div style={styles.profitLine}>
-            ✅ If TP1/TP2/TP3 Hit: +${signal.positionSizing.tp1ProfitUsd} / +$
-            {signal.positionSizing.tp2ProfitUsd} / +${signal.positionSizing.tp3ProfitUsd}
+            {`✅ If TP1/TP2/TP3 Hit: +$${signal.positionSizing.tp1ProfitUsd} / +$${signal.positionSizing.tp2ProfitUsd} / +$${signal.positionSizing.tp3ProfitUsd}`}
           </div>
         </div>
       ) : (
@@ -98,7 +66,6 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
         </div>
       )}
 
-      {/* Won/Lost quick buttons */}
       {drawdownAlertOn && (
         <div style={styles.wonLostRow}>
           <button style={{ ...styles.wonLostBtn, borderColor: C.green, color: C.green }} onClick={onWon}>
@@ -110,12 +77,12 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
         </div>
       )}
 
-      {/* Spread warning */}
       {signal.blocked && (
-        <div style={styles.warningBox}>⚠️ {signal.blockReason || 'High spread — signal is not safe right now'}</div>
+        <div style={styles.warningBox}>
+          ⚠️ {signal.blockReason || 'High spread — signal is not safe right now'}
+        </div>
       )}
 
-      {/* Quick stats */}
       {Array.isArray(signal.quickStats) && signal.quickStats.length > 0 && (
         <div style={styles.statsRow}>
           {signal.quickStats.map((s, i) => (
@@ -127,7 +94,6 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
         </div>
       )}
 
-      {/* Structure grid */}
       {Array.isArray(signal.structure) && signal.structure.length > 0 && (
         <div style={styles.structureGrid}>
           {signal.structure.map((s, i) => (
@@ -139,7 +105,6 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
         </div>
       )}
 
-      {/* MTF bias */}
       {signal.mtfBias && (
         <div style={styles.mtfRow}>
           {['4h', '1h', '15m', '5m'].map((tf) => (
@@ -153,10 +118,8 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
         </div>
       )}
 
-      {/* Pattern badge */}
       {signal.pattern && <div style={styles.patternBadge}>🧩 {signal.pattern}</div>}
 
-      {/* Collapsible detail */}
       {signal.detail && (
         <div>
           <button style={styles.detailToggle} onClick={() => setDetailOpen((v) => !v)}>
@@ -166,7 +129,6 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
         </div>
       )}
 
-      {/* Disclaimer — mandatory, never remove */}
       <div style={styles.disclaimer}>
         ⚠️ This is a technical analysis, not investment advice. Trade at your own risk.
       </div>
@@ -174,13 +136,18 @@ export default function SignalCard({ signal, drawdownAlertOn, onWon, onLost }) {
   )
 }
 
-function TpRow({ label, data, color }) {
+// ✅ FIX: SL uses "-" prefix, TP uses "+"
+function TpRow({ label, data, color, pairSymbol, isSL = false }) {
   if (!data) return null
+  const prefix = isSL ? '-' : '+'
   return (
     <div style={styles.tpRow}>
       <span style={styles.tpLabel}>{label}</span>
       <span style={{ ...styles.tpValue, color }}>
-        {formatPrice(data.price)} <span style={styles.tpPips}>({data.pips >= 0 ? '+' : ''}{data.pips?.toFixed(1)} pips)</span>
+        {formatPrice(data.price, pairSymbol)}{' '}
+        <span style={styles.tpPips}>
+          ({prefix}{data.pips?.toFixed(1)} pips)
+        </span>
       </span>
     </div>
   )
@@ -193,11 +160,6 @@ function SizingRow({ label, value }) {
       <span style={styles.sizingValue}>{value}</span>
     </div>
   )
-}
-
-function formatPrice(p) {
-  if (typeof p !== 'number' || Number.isNaN(p)) return '—'
-  return p.toFixed(5)
 }
 
 function biasColor(bias) {
@@ -391,4 +353,4 @@ const styles = {
     borderTop: `1px solid ${C.border}`,
     paddingTop: 10,
   },
-}
+        }
