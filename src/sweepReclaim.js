@@ -1,9 +1,10 @@
 // sweepReclaim.js — Mode 1: SWEEP RECLAIM
-// ✅ FIXES:
-// 1. SL inversion guard added
-// 2. TP2 direction validation added
-// 3. buffer: atr*0.3 → atr*0.5
-// 4. HTF logic: 4h primary only (1h conflict no longer blocks)
+// ✅ FINAL VERSION:
+// - TP order strictly enforced: LONG → tp1<tp2<tp3, SHORT → tp1>tp2>tp3
+// - TP2 fallback → midpoint of TP1/TP3 if structure target invalid
+// - SL inversion guard
+// - buffer atr*0.5
+// - HTF 4h primary only
 
 import { findSwings, calcATR, isFiniteNumber } from './smartMoney.js'
 
@@ -27,7 +28,6 @@ export function runSweepReclaim({ timeframes, htfBias4h, htfBias1h }) {
   const recentSwingHigh = swingHighs[swingHighs.length - 1]
   const recentSwingLow = swingLows[swingLows.length - 1]
 
-  // ✅ FIX: 4h is primary — 1h conflict no longer blocks signal
   const htfAgreesBullish = htfBias4h !== 'Bearish'
   const htfAgreesBearish = htfBias4h !== 'Bullish'
 
@@ -72,34 +72,50 @@ export function runSweepReclaim({ timeframes, htfBias4h, htfBias1h }) {
   if (!stillValid) return { noSignal: true }
 
   const entry = lastCandle.close
-  // ✅ FIX: buffer increased from 0.3 to 0.5 for realistic SL distance
   const buffer = atr * 0.5
 
   let sl, tp1, tp2, tp3
 
   if (direction === 'LONG') {
     sl = sweepLevel - buffer
-    const structureTarget = swingHighs[swingHighs.length - 1].price
     const risk = entry - sl
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry + risk * 1.5
-    // ✅ FIX: validate TP2 is above entry for LONG
-    tp2 = structureTarget > entry ? structureTarget : entry + risk * 2
     tp3 = entry + risk * 3
+
+    // TP2 must be strictly between TP1 and TP3
+    const structureTarget = swingHighs[swingHighs.length - 1].price
+    tp2 = structureTarget > tp1 && structureTarget < tp3
+      ? structureTarget
+      : entry + risk * 2.25
   } else {
     sl = sweepLevel + buffer
-    const structureTarget = swingLows[swingLows.length - 1].price
     const risk = sl - entry
+    if (risk <= 0) return { noSignal: true }
+
     tp1 = entry - risk * 1.5
-    // ✅ FIX: validate TP2 is below entry for SHORT
-    tp2 = structureTarget < entry ? structureTarget : entry - risk * 2
     tp3 = entry - risk * 3
+
+    // For SHORT: tp3 < tp2 < tp1 (all below entry)
+    const structureTarget = swingLows[swingLows.length - 1].price
+    tp2 = structureTarget < tp1 && structureTarget > tp3
+      ? structureTarget
+      : entry - risk * 2.25
   }
 
   if (![entry, sl, tp1, tp2, tp3].every(isFiniteNumber)) return { noSignal: true }
 
-  // ✅ FIX: SL inversion guard added (was missing in original)
   if (direction === 'LONG' && sl >= entry) return { noSignal: true }
   if (direction === 'SHORT' && sl <= entry) return { noSignal: true }
+
+  // Final TP order check (safety net)
+  if (direction === 'LONG' && !(tp1 < tp2 && tp2 < tp3 && tp1 > entry)) {
+    return { noSignal: true }
+  }
+  if (direction === 'SHORT' && !(tp1 > tp2 && tp2 > tp3 && tp1 < entry)) {
+    return { noSignal: true }
+  }
 
   let bias5m = 'Neutral'
   if (confirm && confirm.length >= 2) {
@@ -135,4 +151,4 @@ export function runSweepReclaim({ timeframes, htfBias4h, htfBias1h }) {
         ? 'দাম আগের একটি swing low ভেঙে liquidity sweep করেছে, তারপর candle body আবার সেই লেভেলের ওপরে ক্লোজ করে reclaim নিশ্চিত করেছে এবং এখনো সেই স্ট্রাকচার বজায় আছে। এটি institutional buying-এর একটি সাধারণ ফুটপ্রিন্ট।'
         : 'দাম আগের একটি swing high ভেঙে liquidity sweep করেছে, তারপর candle body আবার সেই লেভেলের নিচে ক্লোজ করে reclaim নিশ্চিত করেছে এবং এখনো সেই স্ট্রাকচার বজায় আছে। এটি institutional selling-এর একটি সাধারণ ফুটপ্রিন্ট।',
   }
-}
+      }
