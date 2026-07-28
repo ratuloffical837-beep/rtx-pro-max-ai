@@ -1,14 +1,10 @@
-// ForexSection.jsx — replaces SpotSection.jsx + FuturesSection.jsx from the
-// original crypto app. Single unified Forex view, no Spot/Futures toggle.
-//
-// ── FIX IN THIS VERSION ─────────────────────────────────────────────────
-// 🔴 The `consume: true` call to /api/check-status never sent `userId` —
-// server.js requires it and returns 400 without it, so every free-trial
-// signal generation silently failed to record its usage on the backend
-// (the local `signalsUsed` state still incremented in the UI, but the
-// backend counter never moved, meaning a cleared cache or a second device
-// would reset the "5 free signals" limit). Now uses telegramUser.js's
-// userId, same as App.jsx.
+// ForexSection.jsx
+// ✅ FINAL VERSION:
+// - Live price polls every 60s (with cache)
+// - JPY-aware price format via formatPrice
+// - Dead priceChangePct feature removed
+// - Sound feature removed (was never implemented)
+// - Uses telegramUser userId for check-status consume call
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { C, FREE_TRIAL_LIMIT, SIGNAL_MODES, BACKEND_URL } from './constants.js'
@@ -17,13 +13,21 @@ import { isForexMarketOpen, nextOpenDayLabel } from './marketHours.js'
 import { getApiKey, fetchAllTimeframes, fetchLivePrice } from './twelveDataClient.js'
 import { generateSignal } from './signalEngine.js'
 import { getTelegramUser } from './telegramUser.js'
+import { formatPrice } from './pipUtils.js'
 import SignalCard from './SignalCard.jsx'
 
-export default function ForexSection({ selectedModeId, isPremium, signalsUsed, setSignalsUsed, onRequirePremium }) {
+const LIVE_PRICE_POLL_MS = 60_000
+
+export default function ForexSection({
+  selectedModeId,
+  isPremium,
+  signalsUsed,
+  setSignalsUsed,
+  onRequirePremium,
+}) {
   const [selectedPairName, setSelectedPairName] = useState('EUR/USD')
   const [favorites, setFavorites] = useState([])
   const [livePrice, setLivePrice] = useState(null)
-  const [priceChangePct, setPriceChangePct] = useState(null)
 
   const [signal, setSignal] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -37,15 +41,15 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
   const [pickerTab, setPickerTab] = useState('Major')
   const [pickerSearch, setPickerSearch] = useState('')
 
-  const [soundOn, setSoundOn] = useState(true)
-
-  const selectedMarket = useMemo(() => findMarketByName(selectedPairName) || FOREX_MARKETS[0], [selectedPairName])
+  const selectedMarket = useMemo(
+    () => findMarketByName(selectedPairName) || FOREX_MARKETS[0],
+    [selectedPairName]
+  )
   const currentMode = SIGNAL_MODES.find((m) => m.id === selectedModeId) || SIGNAL_MODES[0]
   const marketOpen = isForexMarketOpen()
   const hasApiKey = !!getApiKey()
   const signalsRemaining = Math.max(FREE_TRIAL_LIMIT - signalsUsed, 0)
 
-  // Load persisted preferences on mount
   useEffect(() => {
     try {
       const savedPair = localStorage.getItem('rtx_forex_pair')
@@ -54,38 +58,44 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
       const savedFavs = localStorage.getItem('rtx_forex_favs')
       if (savedFavs) setFavorites(JSON.parse(savedFavs))
 
-      const savedSound = localStorage.getItem('rtx_sound')
-      setSoundOn(savedSound !== 'off')
-
       const alertPref = localStorage.getItem('rtx_drawdown_alert_on')
       setDrawdownAlertOn(alertPref !== 'off')
 
       const today = new Date().toISOString().slice(0, 10)
       const storedDate = localStorage.getItem('rtx_daily_loss_date')
-      setLossCountToday(storedDate === today ? parseInt(localStorage.getItem('rtx_daily_loss_count') || '0', 10) : 0)
+      setLossCountToday(
+        storedDate === today
+          ? parseInt(localStorage.getItem('rtx_daily_loss_count') || '0', 10)
+          : 0
+      )
     } catch (e) {
-      console.error('ForexSection: failed to load persisted preferences:', e.message)
+      console.error('ForexSection: failed to load preferences:', e.message)
     }
   }, [])
 
-  // Live price for the selected pair only — never poll all 50 at once.
+  // ✅ Live price polling every 60s
   useEffect(() => {
     let cancelled = false
     setLivePrice(null)
-    setPriceChangePct(null)
 
     if (!hasApiKey || !selectedMarket) return
 
-    fetchLivePrice(selectedMarket.td)
-      .then((price) => {
-        if (!cancelled) setLivePrice(price)
-      })
-      .catch((e) => {
-        console.error('ForexSection: live price fetch failed:', e.message)
-      })
+    const fetchPrice = () => {
+      fetchLivePrice(selectedMarket.td)
+        .then((price) => {
+          if (!cancelled) setLivePrice(price)
+        })
+        .catch((e) => {
+          console.error('ForexSection: live price fetch failed:', e.message)
+        })
+    }
+
+    fetchPrice()
+    const intervalId = setInterval(fetchPrice, LIVE_PRICE_POLL_MS)
 
     return () => {
       cancelled = true
+      clearInterval(intervalId)
     }
   }, [selectedMarket, hasApiKey])
 
@@ -97,7 +107,7 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
     try {
       localStorage.setItem('rtx_forex_pair', name)
     } catch (e) {
-      console.error('ForexSection: failed to persist selected pair:', e.message)
+      console.error('ForexSection: failed to persist pair:', e.message)
     }
   }
 
@@ -113,23 +123,14 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
     })
   }
 
-  function toggleSound() {
-    setSoundOn((prev) => {
-      const next = !prev
-      try {
-        localStorage.setItem('rtx_sound', next ? 'on' : 'off')
-      } catch (e) {
-        console.error('ForexSection: failed to persist sound preference:', e.message)
-      }
-      return next
-    })
-  }
-
   function recordTrade(won) {
     try {
       const today = new Date().toISOString().slice(0, 10)
       const storedDate = localStorage.getItem('rtx_daily_loss_date')
-      let count = storedDate === today ? parseInt(localStorage.getItem('rtx_daily_loss_count') || '0', 10) : 0
+      let count =
+        storedDate === today
+          ? parseInt(localStorage.getItem('rtx_daily_loss_count') || '0', 10)
+          : 0
 
       if (!won) count += 1
 
@@ -137,7 +138,7 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
       localStorage.setItem('rtx_daily_loss_count', String(count))
       setLossCountToday(count)
     } catch (e) {
-      console.error('ForexSection: failed to record trade outcome:', e.message)
+      console.error('ForexSection: failed to record trade:', e.message)
     }
   }
 
@@ -180,17 +181,12 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
       }
 
       setDebugReason(null)
-
       setSignal(result)
 
       if (!isPremium) {
         setSignalsUsed((prev) => prev + 1)
         try {
-          if (!BACKEND_URL) {
-            console.error('ForexSection: VITE_BACKEND_URL is not set — trial counter will not sync to the server.')
-          } else {
-            // 🔴 userId is now required by server.js — without it the call
-            // returned 400 and the backend's trial counter never moved.
+          if (BACKEND_URL) {
             const { userId } = getTelegramUser()
             const res = await fetch(`${BACKEND_URL}/api/check-status`, {
               method: 'POST',
@@ -198,7 +194,7 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
               body: JSON.stringify({ userId, consume: true }),
             })
             if (!res.ok) {
-              console.error('ForexSection: check-status consume call returned', res.status)
+              console.error('ForexSection: check-status returned', res.status)
             }
           }
         } catch (e) {
@@ -209,8 +205,10 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
       console.error('ForexSection: signal generation failed:', e.message)
       if (e.message === 'API_KEY_MISSING') {
         setErrorMsg('⚠️ প্রথমে Settings থেকে আপনার API Key যোগ করুন।')
-      } else if (e.message === 'CREDIT_EXCEEDED' || /credit/i.test(e.message)) {
-        setErrorMsg('⚠️ আজকের API কল লিমিট শেষ — কাল আবার চেষ্টা করুন, অথবা নতুন Key ব্যবহার করুন।')
+      } else if (/credit/i.test(e.message) || /limit/i.test(e.message)) {
+        setErrorMsg('⚠️ আজকের API কল লিমিট শেষ — কাল আবার চেষ্টা করুন।')
+      } else if (/15m/i.test(e.message)) {
+        setErrorMsg('⚠️ 15m ক্যান্ডেল ডেটা পাওয়া যায়নি — কিছুক্ষণ পর আবার চেষ্টা করুন।')
       } else {
         setErrorMsg('⚠️ ডেটা আনতে সমস্যা হয়েছে — একটু পর আবার চেষ্টা করুন।')
       }
@@ -231,37 +229,26 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
 
   return (
     <div style={styles.wrap}>
-      {/* 1. Trial counter banner */}
       {!isPremium && (
-        <div style={styles.trialBanner}>🎁 Free Signals Remaining: {signalsRemaining} / {FREE_TRIAL_LIMIT}</div>
+        <div style={styles.trialBanner}>
+          🎁 Free Signals Remaining: {signalsRemaining} / {FREE_TRIAL_LIMIT}
+        </div>
       )}
 
-      {/* Loss banner (advisory) */}
       {drawdownAlertOn && lossCountToday >= 3 && (
         <div style={styles.drawdownBanner}>
-          ⚠️ আজ {lossCountToday}টি লস হয়েছে — মানি ম্যানেজমেন্ট অনুযায়ী আজকের জন্য ট্রেডিং বিরতি
-          নেওয়ার পরামর্শ দেওয়া হচ্ছে।
+          ⚠️ আজ {lossCountToday}টি লস হয়েছে — আজকের জন্য ট্রেডিং বিরতি নেওয়ার পরামর্শ।
         </div>
       )}
 
-      {/* 2. Market closed banner OR chart+generate */}
       {!marketOpen ? (
-        <div style={styles.closedBanner}>
-          🔴 Market Closed — খুলবে {nextOpenDayLabel()}
-        </div>
+        <div style={styles.closedBanner}>🔴 Market Closed — খুলবে {nextOpenDayLabel()}</div>
       ) : (
         <>
-          {/* 3. Chart — 🔴 FIX: default interval was 60 (1h), which visually
-              suggested signals came from the 1h chart. Every mode engine
-              actually analyzes the 15m candles for entries (4h/1h are only
-              used for HTF bias confirmation, 5m only for an informational
-              confirmation reading) — the chart now defaults to matching
-              that 15m entry timeframe so what's shown matches what's
-              analyzed. The person can still switch timeframes with the
-              chart's own 1m/5m/15m/30m/1h buttons; that only changes the
-              visual chart, never the underlying signal calculation. */}
           <div style={styles.chartBox}>
-            <div style={styles.timeframeNote}>📊 এন্ট্রি টাইমফ্রেম: 15m (4h/1h = ট্রেন্ড কনফার্মেশন)</div>
+            <div style={styles.timeframeNote}>
+              📊 এন্ট্রি টাইমফ্রেম: 15m (4h/1h = ট্রেন্ড কনফার্মেশন)
+            </div>
             <iframe
               title="tradingview-chart"
               style={styles.chartFrame}
@@ -271,23 +258,18 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
             />
           </div>
 
-          {/* 4. Pair info */}
           <div style={styles.pairInfoCard}>
             <div>
               <div style={styles.pairInfoName}>{selectedMarket.name}</div>
               <span style={styles.pairInfoCat}>{selectedMarket.cat}</span>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div style={styles.pairInfoPrice}>{livePrice ? livePrice.toFixed(5) : '—'}</div>
-              {priceChangePct !== null && (
-                <div style={{ ...styles.pairInfoChange, color: priceChangePct >= 0 ? C.green : C.red }}>
-                  {priceChangePct >= 0 ? '+' : ''}{priceChangePct.toFixed(2)}%
-                </div>
-              )}
+              <div style={styles.pairInfoPrice}>
+                {formatPrice(livePrice, selectedMarket.td)}
+              </div>
             </div>
           </div>
 
-          {/* 5. Generate button */}
           <button
             style={{ ...styles.generateBtn, opacity: generateDisabled ? 0.5 : 1 }}
             onClick={handleGenerate}
@@ -295,21 +277,19 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
           >
             🚀 GENERATE {currentMode.name} SIGNAL
           </button>
+
           {!hasApiKey && (
-            <div style={styles.disabledHint}>⚠️ প্রথমে Settings থেকে আপনার API Key যোগ করুন।</div>
+            <div style={styles.disabledHint}>
+              ⚠️ প্রথমে Settings থেকে আপনার API Key যোগ করুন।
+            </div>
           )}
 
-          {/* 6. Progress */}
           {loading && <div style={styles.progressBox}>{progressStep}</div>}
 
-          {/* 7. Error/no-signal */}
           {errorMsg && <div style={styles.errorBox}>{errorMsg}</div>}
-          {/* 🆕 DEBUG: shows signalEngine.js's exact reason for "no signal" —
-              temporary diagnostic aid, safe to remove once the root cause
-              of persistent no-signal reports is confirmed and fixed. */}
+
           {debugReason && <div style={styles.debugBox}>🔍 DEBUG: {debugReason}</div>}
 
-          {/* 8. SignalCard */}
           {signal && (
             <SignalCard
               signal={signal}
@@ -321,17 +301,10 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
         </>
       )}
 
-      {/* 9. Change market */}
       <button style={styles.changeMarketBtn} onClick={() => setPickerOpen(true)}>
         🔁 Tap to Change Market
       </button>
 
-      {/* 10. Sound toggle */}
-      <button style={styles.soundBtn} onClick={toggleSound}>
-        {soundOn ? '🔊 Sound On' : '🔇 Sound Off'}
-      </button>
-
-      {/* Market picker */}
       {pickerOpen && (
         <div style={styles.overlay} onClick={() => setPickerOpen(false)}>
           <div style={styles.pickerSheet} onClick={(e) => e.stopPropagation()}>
@@ -362,7 +335,14 @@ export default function ForexSection({ selectedModeId, isPremium, signalsUsed, s
             {favorites.length > 0 && (
               <div style={styles.favRow}>
                 {favorites.map((f) => (
-                  <button key={f} style={styles.favChip} onClick={() => { persistPair(f); setPickerOpen(false) }}>
+                  <button
+                    key={f}
+                    style={styles.favChip}
+                    onClick={() => {
+                      persistPair(f)
+                      setPickerOpen(false)
+                    }}
+                  >
                     ⭐ {f}
                   </button>
                 ))}
@@ -454,7 +434,6 @@ const styles = {
   pairInfoName: { fontSize: 15, fontWeight: 800, color: C.text },
   pairInfoCat: { fontSize: 10, color: C.muted, fontWeight: 700 },
   pairInfoPrice: { fontSize: 15, fontWeight: 800, color: C.text },
-  pairInfoChange: { fontSize: 11, fontWeight: 700, marginTop: 2 },
   generateBtn: {
     width: '100%',
     background: C.cyan,
@@ -505,17 +484,6 @@ const styles = {
     color: C.text,
     fontWeight: 700,
     fontSize: 13,
-    cursor: 'pointer',
-  },
-  soundBtn: {
-    width: '100%',
-    background: 'transparent',
-    border: `1px solid ${C.border}`,
-    borderRadius: 10,
-    padding: '10px 0',
-    color: C.muted,
-    fontWeight: 600,
-    fontSize: 12,
     cursor: 'pointer',
   },
   overlay: {
@@ -597,4 +565,4 @@ const styles = {
     cursor: 'pointer',
     fontSize: 13,
   },
-    }
+}
